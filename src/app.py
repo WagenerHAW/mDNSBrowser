@@ -1,5 +1,8 @@
 import sys
 import os
+import platform
+import time
+
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QListWidget, QListWidgetItem,
                              QVBoxLayout, QHBoxLayout, QGridLayout, QWidget, QDialog, QPushButton,
                              QLabel, QTextEdit)
@@ -29,6 +32,32 @@ try:
     windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 except ImportError:
     pass
+
+import platform
+import os
+
+
+def check_os():
+    # Get the OS name using platform.system()
+    os_name = platform.system()
+
+    if os_name == "Linux":
+        return "Linux"
+    elif os_name == "Darwin":
+        return "macOS"
+    elif os_name == "Windows":
+        return "Windows"
+    else:
+        return "Unknown OS"
+
+def get_os_logo():
+    logo_os = check_os()
+    if logo_os == "macOS":
+        return "assets/default_icon.icns"
+    elif logo_os == "Windows":
+        return "assets/default_icon.ico"
+    else:
+        return "assets/default_icon.png"
 
 class MDNSBrowser(QMainWindow):
     def __init__(self):
@@ -316,7 +345,8 @@ class MDNSBrowser(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setWindowIcon(QIcon(resource_path('assets/default_icon.ico')))
+    logo = resource_path(get_os_logo())
+    app.setWindowIcon(QIcon(logo))
     window = MDNSBrowser()
     window.show()
     sys.exit(app.exec())
