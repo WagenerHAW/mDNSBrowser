@@ -55,7 +55,7 @@ def get_os_logo():
     if logo_os == "macOS":
         return "assets/default_icon.icns"
     elif logo_os == "Windows":
-        return "assets/default_icon.ico"
+        return "assets\\default_icon.ico"
     else:
         return "assets/default_icon.png"
 
