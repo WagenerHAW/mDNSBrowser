@@ -1,13 +1,34 @@
 import sys
+import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QListWidget, QListWidgetItem,
                              QVBoxLayout, QHBoxLayout, QGridLayout, QWidget, QDialog, QPushButton,
                              QLabel, QTextEdit)
 from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtGui import QIcon
+
 from zeroconf import ServiceBrowser, Zeroconf, ServiceStateChange
 from typing import cast
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
+try:
+    from ctypes import windll  # Only exists on Windows.
+    myappid = 'haw.mcastmanager.gui.alpha'
+    windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+except ImportError:
+    pass
 
 class MDNSBrowser(QMainWindow):
     def __init__(self):
@@ -233,9 +254,14 @@ class MDNSBrowser(QMainWindow):
         # Create a set of current services
         current_services = {self.service_list_widget.item(i).text() for i in range(self.service_list_widget.count())}
         # Create a set of old and new services
-        new_services = {name.rstrip(info.type) for name, info in self.services.items() if self._filter in info.type}
+        #new_services = {name.rstrip(info.type) for name, info in self.services.items() if self._filter in info.type}
         # Create a filtered list of all services with the selected service filter
-        filtered_list = {name.rstrip(info.type): info for name, info in self.services.items() if
+        #filtered_list = {name.rstrip(info.type): info for name, info in self.services.items() if
+        #                 self._filter in info.type}
+
+        new_services = {name for name, info in self.services.items() if self._filter in info.type}
+        # Create a filtered list of all services with the selected service filter
+        filtered_list = {name: info for name, info in self.services.items() if
                          self._filter in info.type}
         # Add new services
         check = new_services - current_services
@@ -290,6 +316,7 @@ class MDNSBrowser(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(resource_path('assets/default_icon.ico')))
     window = MDNSBrowser()
     window.show()
     sys.exit(app.exec())
