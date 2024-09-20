@@ -1,8 +1,20 @@
+"""
+mDNS Service Browser
+
+This application browses and queries mDNS services on the local network.
+It allows users to view discovered services and perform manual queries.
+
+NEEDED REWRITE TO ASYNC - FEEL FREE TO CONTRIBUTE
+
+Author: Thorsten Wagener
+Date: 20.09.2024
+License: free
+"""
 import sys
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QListWidget, QListWidgetItem,
                              QVBoxLayout, QHBoxLayout, QGridLayout, QWidget, QDialog, QPushButton,
-                             QLabel, QTextEdit)
+                             QLabel, QLineEdit)
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QIcon
 
@@ -54,6 +66,16 @@ class MDNSBrowser(QMainWindow):
 
         self.main_layout.addWidget(self.rescan_button)  # Add button to layout
 
+        # Add Manual Query Section
+        self.manual_query_label = QLabel("Manual Service Query:")
+        self.manual_query_input = QLineEdit()
+        self.manual_query_button = QPushButton("Query Service")
+        self.manual_query_button.clicked.connect(self.query_service)
+
+        self.main_layout.addWidget(self.manual_query_label)
+        self.main_layout.addWidget(self.manual_query_input)
+        self.main_layout.addWidget(self.manual_query_button)
+
         container = QWidget()
         container.setLayout(self.main_layout)
         self.setCentralWidget(container)
@@ -68,6 +90,7 @@ class MDNSBrowser(QMainWindow):
                                       handlers=[self.on_service_discovered])
         # Dict for all service browsers
         self.service_browsers = {}
+        self.service_browsers_added = {}
 
         # Timer for updating the list
         self.timer = QTimer()
@@ -83,6 +106,36 @@ class MDNSBrowser(QMainWindow):
         else:
             self._filter = selected_text
         self.service_filter.setText(f"Filter: {self._filter}")
+
+    def query_service(self):
+        """Handle manual service queries."""
+        service_query = self.manual_query_input.text().strip()
+        try:
+            if service_query:
+                self.service_browsers_added[service_query]=ServiceBrowser(self.zeroconf, f"{service_query}",
+                               handlers=[self.on_service_discovered])
+
+            else:
+                raise ValueError("Service query cannot be empty.\nThe query should look something like:\n\n\t_netaudio-cmc._udp.local.")
+        except Exception as e:
+            self.show_error_dialog(f"{str(e) : ^10}")
+
+
+    def show_error_dialog(self, message):
+        """Display an error dialog with the specified message."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Error")
+        layout = QVBoxLayout()
+        error_label = QLabel(message)
+        error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(error_label)
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(dialog.accept)
+        layout.addWidget(ok_button)
+        dialog.setLayout(layout)
+        dialog.exec()
+
+
 
     def show_info(self, list_item):
         info = list_item.data(Qt.ItemDataRole.UserRole)
@@ -209,8 +262,27 @@ class MDNSBrowser(QMainWindow):
         elif state_change is ServiceStateChange.Removed:
             self.services.pop(name, None)
 
+    def clean_added_browser(self):
+        mark_delete = []
+        for browser in self.service_browsers_added:
+            if browser not in self.service_browsers:
+                try:
+                    self.service_browsers_added[browser].cancel()
+                    mark_delete.append(browser)
+                except KeyError:
+                    print("Oops")
+        for browser in mark_delete:
+            del self.service_browsers_added[browser]
+
+
+        print(self.service_browsers_added)
+        print(self.service_browsers)
+
+
+
     def update_list(self):
         # Update service_type_widget
+
         current_service_types = {self.service_type_widget.item(i).text() for i in
                                  range(self.service_type_widget.count())}
 
@@ -270,11 +342,27 @@ class MDNSBrowser(QMainWindow):
                 row = self.service_list_widget.row(item)
                 self.service_list_widget.takeItem(row)
 
+        self.clean_added_browser()
+
+    def stop_browsers(self):
+        mark_delete = []
+        for browser in self.service_browsers:
+            self.service_browsers[browser].cancel()
+            mark_delete.append(browser)
+        for browser in mark_delete:
+            del self.service_browsers[browser]
+
+    def stop_added_browser(self):
+        for browser in self.service_browsers_added:
+            self.service_browsers_added[browser].cancel()
+            del self.service_browsers[browser]
+
     def rescan_network(self):
         """Rescan the network by restarting the Zeroconf browser."""
         # Stop the current service browsers
-        for browser in self.service_browsers.values():
-            browser.cancel()
+        self.stop_browsers()
+        self.stop_added_browser()
+        # Stop main browser
         self.browser.cancel()
         self.zeroconf.close()
 
