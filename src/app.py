@@ -275,11 +275,6 @@ class MDNSBrowser(QMainWindow):
             del self.service_browsers_added[browser]
 
 
-        print(self.service_browsers_added)
-        print(self.service_browsers)
-
-
-
     def update_list(self):
         # Update service_type_widget
 
@@ -353,9 +348,11 @@ class MDNSBrowser(QMainWindow):
             del self.service_browsers[browser]
 
     def stop_added_browser(self):
-        for browser in self.service_browsers_added:
-            self.service_browsers_added[browser].cancel()
-            del self.service_browsers[browser]
+        try:
+            for browser in self.service_browsers_added:
+                self.service_browsers_added[browser].cancel()
+        except KeyError:
+            pass
 
     def rescan_network(self):
         """Rescan the network by restarting the Zeroconf browser."""
