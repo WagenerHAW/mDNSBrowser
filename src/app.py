@@ -24,7 +24,7 @@ from typing import cast
 
 import logging
 logging.basicConfig(
-            level=logging.ERROR,  # You can change this to INFO or ERROR depending on the amount of detail you want
+            level=logging.INFO,  # You can change this to INFO or ERROR depending on the amount of detail you want
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[logging.StreamHandler()]
         )
@@ -152,6 +152,7 @@ class MDNSBrowser(QMainWindow):
                     self.service_browsers_added[service_query] = ServiceBrowser(self.zeroconf, f"{service_query}",
                                    handlers=[self.on_service_discovered])
                     self.service_types.add(service_query)
+                    self.service_browsers[service_query] = self.service_browsers_added[service_query]
                     #self.service_browsers[service_query] = ServiceBrowser(self.zeroconf, service_query,
                     #                                                      handlers=[self.on_service_state_change])
                 else:
@@ -320,8 +321,9 @@ class MDNSBrowser(QMainWindow):
 
         current_service_types = {self.service_type_widget.item(i).text() for i in
                                  range(self.service_type_widget.count())}
-        logger.info(f"Service States:\nZero: {self.zeroconf}\nCur:{current_service_types}\nSer:{self.service_types}\nBrow:{self.service_browsers}\nSelfBrow: {self.service_browsers_added}\n\n")
+        logger.info(f"Service States:\nCur:{current_service_types}\nSer:{self.service_types}\nBrow:{self.service_browsers}\nSelfBrow: {self.service_browsers_added}\n\n")
         check = self.service_types - current_service_types
+        logger.info(f"Check: {check}")
         if len(check) > 0:
             # Add new service types
             for service_type in check:
@@ -344,11 +346,6 @@ class MDNSBrowser(QMainWindow):
         # Update service_list_widget
         # Create a set of current services
         current_services = {self.service_list_widget.item(i).text() for i in range(self.service_list_widget.count())}
-        # Create a set of old and new services
-        #new_services = {name.rstrip(info.type) for name, info in self.services.items() if self._filter in info.type}
-        # Create a filtered list of all services with the selected service filter
-        #filtered_list = {name.rstrip(info.type): info for name, info in self.services.items() if
-        #                 self._filter in info.type}
 
         new_services = {name for name, info in self.services.items() if self._filter in info.type}
         # Create a filtered list of all services with the selected service filter
