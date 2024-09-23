@@ -24,7 +24,7 @@ from typing import cast
 
 import logging
 logging.basicConfig(
-            level=logging.ERROR,  # You can change this to INFO or ERROR depending on the amount of detail you want
+            level=logging.INFO,  # You can change this to INFO or ERROR depending on the amount of detail you want
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[logging.StreamHandler()]
         )
@@ -38,10 +38,10 @@ class MDNSBrowser(QMainWindow):
         super().__init__()
         self.init_zeroconf()
         self.setWindowTitle('mDNS Service Browser')
-        self.setGeometry(100, 100, 600, 400)
+        self.setGeometry(100, 100, 1024, 768)
 
         # UI Setup
-        self.service_type_widget_hl = QLabel(f'Query {self.browser_base} results:')
+        self.service_type_widget_hl = QLabel(f'Query results:')
         self.service_type_widget = QListWidget()
         self.service_filter = QLabel()
         self.service_filter.setText("Filter:")
@@ -68,13 +68,13 @@ class MDNSBrowser(QMainWindow):
         self.main_layout.addWidget(self.service_filter)
 
         # Add Rescan Button
-        self.rescan_button = QPushButton("Rescan Network")
+        self.rescan_button = QPushButton("Clear and rescan Network")
         self.rescan_button.clicked.connect(self.rescan_network)
 
         self.main_layout.addWidget(self.rescan_button)  # Add button to layout
 
         # Add Checkbox for Auto-Discovery
-        self.auto_discovery_checkbox = QPushButton("Enable Auto-Discovery")
+        self.auto_discovery_checkbox = QPushButton("Discovery for _services._dns-sd._udp.local. running...")
         self.auto_discovery_checkbox.setCheckable(True)
         self.auto_discovery_checkbox.setChecked(True)  # Default to auto-discovery enabled
         self.auto_discovery_checkbox.toggled.connect(self.toggle_auto_discovery)
@@ -121,11 +121,15 @@ class MDNSBrowser(QMainWindow):
 
     def toggle_auto_discovery(self, checked):
         """Toggle auto-discovery based on checkbox state."""
+
         if checked:
+            button_text = "running..."
             self.browser = ServiceBrowser(self.zeroconf, "_services._dns-sd._udp.local.",
                                           handlers=[self.on_service_discovered])
         else:
             self.stop_browsers()  # Stop auto-discovery if unchecked
+            button_text = "stopped!"
+        self.auto_discovery_checkbox.setText(f"Discovery for _services._dns-sd._udp.local. {button_text} ")
 
     def set_service_filter(self, list_item):
         selected_text = list_item.text()
@@ -140,6 +144,9 @@ class MDNSBrowser(QMainWindow):
     def query_service(self):
         """Handle manual service queries."""
         service_query = self.manual_query_input.text().strip()
+        if service_query == "_services._dns-sd._udp.local.":
+            self.auto_discovery_checkbox.setChecked(True)
+            return
         try:
             if self.auto_discovery_checkbox.isChecked():
                 if service_query:
@@ -152,6 +159,7 @@ class MDNSBrowser(QMainWindow):
                     self.service_browsers_added[service_query] = ServiceBrowser(self.zeroconf, f"{service_query}",
                                    handlers=[self.on_service_discovered])
                     self.service_types.add(service_query)
+                    self.service_browsers[service_query] = self.service_browsers_added[service_query]
                     #self.service_browsers[service_query] = ServiceBrowser(self.zeroconf, service_query,
                     #                                                      handlers=[self.on_service_state_change])
                 else:
@@ -320,7 +328,7 @@ class MDNSBrowser(QMainWindow):
 
         current_service_types = {self.service_type_widget.item(i).text() for i in
                                  range(self.service_type_widget.count())}
-        logger.info(f"Service States:\nZero: {self.zeroconf}\nCur:{current_service_types}\nSer:{self.service_types}\nBrow:{self.service_browsers}\nSelfBrow: {self.service_browsers_added}\n\n")
+        logger.debug(f"Service States:\nCur:{current_service_types}\nSer:{self.service_types}\nBrow:{self.service_browsers}\nSelfBrow: {self.service_browsers_added}\n\n")
         check = self.service_types - current_service_types
         if len(check) > 0:
             # Add new service types
@@ -344,11 +352,6 @@ class MDNSBrowser(QMainWindow):
         # Update service_list_widget
         # Create a set of current services
         current_services = {self.service_list_widget.item(i).text() for i in range(self.service_list_widget.count())}
-        # Create a set of old and new services
-        #new_services = {name.rstrip(info.type) for name, info in self.services.items() if self._filter in info.type}
-        # Create a filtered list of all services with the selected service filter
-        #filtered_list = {name.rstrip(info.type): info for name, info in self.services.items() if
-        #                 self._filter in info.type}
 
         new_services = {name for name, info in self.services.items() if self._filter in info.type}
         # Create a filtered list of all services with the selected service filter
@@ -380,18 +383,13 @@ class MDNSBrowser(QMainWindow):
         self.clean_added_browser()
 
     def stop_browsers(self):
-        mark_delete = []
-        for browser in self.service_browsers:
-            self.service_browsers[browser].cancel()
-            mark_delete.append(browser)
-        for browser in mark_delete:
-            del self.service_browsers[browser]
-
-
-    def stop_added_browser(self):
         try:
-            for browser in self.service_browsers_added:
-                self.service_browsers_added[browser].cancel()
+            mark_delete = []
+            for browser in self.service_browsers:
+                self.service_browsers[browser].cancel()
+                mark_delete.append(browser)
+            for browser in mark_delete:
+                del self.service_browsers[browser]
         except KeyError:
             pass
 
@@ -399,7 +397,6 @@ class MDNSBrowser(QMainWindow):
         """Rescan the network by restarting the Zeroconf browser."""
         # Stop the current service browsers
         self.stop_browsers()
-        self.stop_added_browser()
         # Stop main browser
         self.zeroconf.close()
 
