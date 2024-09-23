@@ -11,6 +11,7 @@ Date: 20.09.2024
 License: free
 """
 import sys
+import time
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QListWidget, QListWidgetItem,
                              QVBoxLayout, QHBoxLayout, QGridLayout, QWidget, QDialog, QPushButton,
@@ -22,19 +23,25 @@ from zeroconf import ServiceBrowser, Zeroconf, ServiceStateChange
 from typing import cast
 
 import logging
+logging.basicConfig(
+            level=logging.ERROR,  # You can change this to INFO or ERROR depending on the amount of detail you want
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[logging.StreamHandler()]
+        )
 logger = logging.getLogger(__name__)
+
 
 from os_qt_tools import *
 
 class MDNSBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
-
+        self.init_zeroconf()
         self.setWindowTitle('mDNS Service Browser')
         self.setGeometry(100, 100, 600, 400)
 
         # UI Setup
-        self.service_type_widget_hl = QLabel('Query _services._dns-sd._udp.local results:')
+        self.service_type_widget_hl = QLabel(f'Query {self.browser_base} results:')
         self.service_type_widget = QListWidget()
         self.service_filter = QLabel()
         self.service_filter.setText("Filter:")
@@ -66,6 +73,13 @@ class MDNSBrowser(QMainWindow):
 
         self.main_layout.addWidget(self.rescan_button)  # Add button to layout
 
+        # Add Checkbox for Auto-Discovery
+        self.auto_discovery_checkbox = QPushButton("Enable Auto-Discovery")
+        self.auto_discovery_checkbox.setCheckable(True)
+        self.auto_discovery_checkbox.setChecked(True)  # Default to auto-discovery enabled
+        self.auto_discovery_checkbox.toggled.connect(self.toggle_auto_discovery)
+        self.main_layout.addWidget(self.auto_discovery_checkbox)
+
         # Add Manual Query Section
         self.manual_query_label = QLabel("Manual Service Query:")
         self.manual_query_input = QLineEdit()
@@ -80,10 +94,20 @@ class MDNSBrowser(QMainWindow):
         container.setLayout(self.main_layout)
         self.setCentralWidget(container)
 
+
+
+
+        # Timer for updating the list
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_list)
+        self.timer.start(1000)
+
+    def init_zeroconf(self):
         # Zeroconf Setup
         self.services = {}
         self.service_types = set()
         self._filter = ""
+
         self.zeroconf = Zeroconf()
         # Create main Browser for mDNS
         self.browser = ServiceBrowser(self.zeroconf, "_services._dns-sd._udp.local.",
@@ -92,10 +116,16 @@ class MDNSBrowser(QMainWindow):
         self.service_browsers = {}
         self.service_browsers_added = {}
 
-        # Timer for updating the list
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_list)
-        self.timer.start(1000)
+        self.browser_base = "".join(self.browser.types)
+
+
+    def toggle_auto_discovery(self, checked):
+        """Toggle auto-discovery based on checkbox state."""
+        if checked:
+            self.browser = ServiceBrowser(self.zeroconf, "_services._dns-sd._udp.local.",
+                                          handlers=[self.on_service_discovered])
+        else:
+            self.stop_browsers()  # Stop auto-discovery if unchecked
 
     def set_service_filter(self, list_item):
         selected_text = list_item.text()
@@ -111,14 +141,23 @@ class MDNSBrowser(QMainWindow):
         """Handle manual service queries."""
         service_query = self.manual_query_input.text().strip()
         try:
-            if service_query:
-                self.service_browsers_added[service_query]=ServiceBrowser(self.zeroconf, f"{service_query}",
-                               handlers=[self.on_service_discovered])
-
+            if self.auto_discovery_checkbox.isChecked():
+                if service_query:
+                    self.service_browsers_added[service_query]=ServiceBrowser(self.zeroconf, f"{service_query}",
+                                   handlers=[self.on_service_discovered])
+                else:
+                    raise ValueError("Service query cannot be empty.\nThe query should look something like:\n\n\t_netaudio-cmc._udp.local.")
             else:
-                raise ValueError("Service query cannot be empty.\nThe query should look something like:\n\n\t_netaudio-cmc._udp.local.")
+                if service_query:
+                    self.service_browsers_added[service_query] = ServiceBrowser(self.zeroconf, f"{service_query}",
+                                   handlers=[self.on_service_discovered])
+                    self.service_types.add(service_query)
+                    #self.service_browsers[service_query] = ServiceBrowser(self.zeroconf, service_query,
+                    #                                                      handlers=[self.on_service_state_change])
+                else:
+                    raise ValueError("Service query cannot be empty.\nThe query should look something like:\n\n\t_netaudio-cmc._udp.local.")
         except Exception as e:
-            self.show_error_dialog(f"{str(e) : ^10}")
+            self.show_error_dialog(f"{str(e)}")
 
 
     def show_error_dialog(self, message):
@@ -239,6 +278,7 @@ class MDNSBrowser(QMainWindow):
         Checks for services on _services._dns-sd._udp
         :return
         '''
+
         if state_change is ServiceStateChange.Added:
             # Fix wrong ".local" base domain 'local. _homeconnect._tcp.' instead of '. _tcp.local. _homeconnect.'
             if len(name.split(".")) > 4:
@@ -270,7 +310,7 @@ class MDNSBrowser(QMainWindow):
                     self.service_browsers_added[browser].cancel()
                     mark_delete.append(browser)
                 except KeyError:
-                    print("Oops")
+                    logger.error("Could not delete browser %s", browser)
         for browser in mark_delete:
             del self.service_browsers_added[browser]
 
@@ -280,7 +320,7 @@ class MDNSBrowser(QMainWindow):
 
         current_service_types = {self.service_type_widget.item(i).text() for i in
                                  range(self.service_type_widget.count())}
-
+        logger.info(f"Service States:\nZero: {self.zeroconf}\nCur:{current_service_types}\nSer:{self.service_types}\nBrow:{self.service_browsers}\nSelfBrow: {self.service_browsers_added}\n\n")
         check = self.service_types - current_service_types
         if len(check) > 0:
             # Add new service types
@@ -347,6 +387,7 @@ class MDNSBrowser(QMainWindow):
         for browser in mark_delete:
             del self.service_browsers[browser]
 
+
     def stop_added_browser(self):
         try:
             for browser in self.service_browsers_added:
@@ -360,7 +401,6 @@ class MDNSBrowser(QMainWindow):
         self.stop_browsers()
         self.stop_added_browser()
         # Stop main browser
-        self.browser.cancel()
         self.zeroconf.close()
 
         # Clear current data
@@ -373,12 +413,18 @@ class MDNSBrowser(QMainWindow):
 
         # Restart Zeroconf and the main service browser
         self.zeroconf = Zeroconf()
-        self.browser = ServiceBrowser(self.zeroconf, "_services._dns-sd._udp.local.",
+        if self.auto_discovery_checkbox.isChecked():
+            self.browser = ServiceBrowser(self.zeroconf, "_services._dns-sd._udp.local.",
                                       handlers=[self.on_service_discovered])
+        else:
+            if self.browser.is_alive():
+                self.browser.cancel()
 
     def closeEvent(self, event):
         self.timer.stop()
-        self.browser.cancel()
+        self.stop_browsers()
+        if self.browser:
+            self.browser.cancel()
         self.zeroconf.close()
         super().closeEvent(event)
 
