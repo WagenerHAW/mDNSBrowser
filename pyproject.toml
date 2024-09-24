@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "mdnsbrowser"
+version = "0.1.0"
+description = "mDNS Browser for analysing the network"
+authors = ["Thorsten Wagener <thorsten.wagener@haw-hamburg.de>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pyqt6 = "^6.7.1"
+zeroconf = "^0.134.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.3"
+pytest-qt = "^4.4.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

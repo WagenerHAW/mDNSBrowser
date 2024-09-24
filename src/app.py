@@ -396,9 +396,10 @@ class MDNSBrowser(QMainWindow):
     def rescan_network(self):
         """Rescan the network by restarting the Zeroconf browser."""
         # Stop the current service browsers
+        self.zeroconf.close()
         self.stop_browsers()
         # Stop main browser
-        self.zeroconf.close()
+
 
         # Clear current data
         self.services.clear()
@@ -419,10 +420,11 @@ class MDNSBrowser(QMainWindow):
 
     def closeEvent(self, event):
         self.timer.stop()
+        self.zeroconf.close()
         self.stop_browsers()
         if self.browser:
             self.browser.cancel()
-        self.zeroconf.close()
+
         super().closeEvent(event)
 
 
