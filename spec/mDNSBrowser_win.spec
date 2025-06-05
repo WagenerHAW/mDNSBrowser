@@ -2,15 +2,15 @@
 
 datas = [
     ('assets', 'assets'),
-    ('src/os_qt_tools.py', 'os_qt_tools.py')
+    ('src/os_qt_tools.py', '.')
 ]
 
 a = Analysis(
-    ['src/app.py'],
+    ['src\\app.py'],
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=['zeroconf._utils.ipaddress','zeroconf._handlers.answers',],
+    hiddenimports=['zeroconf._utils.ipaddress','zeroconf._handlers.answers', 'psutil'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -26,7 +26,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='mDNSBrowser',
+    name='mDNS Browser',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -39,5 +39,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='assets/default_icon.icns',
+    icon=['assets\\default_icon.ico'],
 )
