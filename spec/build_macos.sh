@@ -7,6 +7,7 @@ if [ -f src/app.py ]; then
       --hide-console="hide-early" \
       --osx-bundle-identifier='mDNSBrowser' \
       --add-data='assets:assets' \
+      --add-data='src/os_qt_tools.py:.' \
       --hidden-import='zeroconf._utils.ipaddress' \
       --hidden-import='zeroconf._handlers.answers' \
       --icon='assets/default_icon.icns' \

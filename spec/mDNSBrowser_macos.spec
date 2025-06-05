@@ -1,11 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+datas = [
+    ('assets', 'assets'),
+    ('src/os_qt_tools.py', 'os_qt_tools.py')
+]
 
 a = Analysis(
     ['src/app.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=datas,
     hiddenimports=['zeroconf._utils.ipaddress', 'zeroconf._handlers.answers'],
     hookspath=[],
     hooksconfig={},

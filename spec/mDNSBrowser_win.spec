@@ -2,6 +2,7 @@
 
 datas = [
     ('assets', 'assets'),
+    ('src/os_qt_tools.py', 'os_qt_tools.py')
 ]
 
 a = Analysis(
