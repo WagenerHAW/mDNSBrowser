@@ -232,6 +232,9 @@ class MDNSBrowser(QMainWindow):
         self.manual_query_button = QPushButton("Query Service")
         self.manual_query_button.clicked.connect(self.manual_query)
 
+        self.dante_query_button = QPushButton("Add Dante Services")
+        self.dante_query_button.clicked.connect(self.dante_query)
+
         left_layout = QVBoxLayout()
         left_layout.addWidget(self.service_type_widget_hl)
         left_layout.addWidget(self.service_type_widget)
@@ -254,6 +257,7 @@ class MDNSBrowser(QMainWindow):
         main_layout.addWidget(self.manual_query_label)
         main_layout.addWidget(self.manual_query_input)
         main_layout.addWidget(self.manual_query_button)
+        main_layout.addWidget(self.dante_query_button)
 
         container = QWidget()
         container.setLayout(main_layout)
@@ -290,10 +294,23 @@ class MDNSBrowser(QMainWindow):
         self.service_filter.setText(f"Filter: {self._filter}")
         self._refresh_service_list()
 
+    def normalize_service_type(self, service: str) -> str:
+        service = service.strip()
+        if not service:
+            return ""
+        if service.endswith(".local."):
+            return service
+        if service.endswith(".local"):
+            return service + "."
+        if service.endswith("."):
+            return service + "local."
+        return service + ".local."
+
     def manual_query(self):
         service_query = self.manual_query_input.text().strip()
         if not service_query:
             return
+        service_query = self.normalize_service_type(service_query)
         if self.worker.loop and self.worker.aiozc:
             try:
                 asyncio.run_coroutine_threadsafe(
@@ -301,6 +318,26 @@ class MDNSBrowser(QMainWindow):
                 )
             except Exception as exc:
                 self._on_error(str(exc))
+
+    def dante_query(self):
+        dante_services = [
+            "_dante-safe._udp",
+            "_dante-upgr._udp",
+            "_netaudio-arc._udp",
+            "_netaudio-chan._udp",
+            "_netaudio-cmc._udp",
+            "_netaudio-dbc._udp",
+            "_dante-ddm-d._udp",
+            "_dante-ddm-c._tcp"
+        ]
+        for service_query in dante_services:
+            if self.worker.loop and self.worker.aiozc:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self._start_manual_browser(service_query+".local."), self.worker.loop
+                    )
+                except Exception as exc:
+                    self._on_error(str(exc))
 
     async def _start_manual_browser(self, service_query: str):
         try:
