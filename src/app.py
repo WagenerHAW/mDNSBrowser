@@ -445,7 +445,7 @@ class MDNSBrowser(QMainWindow):
 
     def clear_filter(self):
         self._filter = None
-        self.service_filter.setText("")
+        self.service_filter.setText("Filter:")
 
     def rescan_network(self):
         self.worker.stop()
