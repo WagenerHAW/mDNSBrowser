@@ -3,7 +3,8 @@
 A cross-platform **mDNS / DNS-SD service discovery tool** built with **PyQt6** and Python’s **asyncio Zeroconf API**.  
 It allows you to browse, filter, and inspect network services (including **Dante audio devices**) in real time.
 
-![screenshot-placeholder](assets/demo.png)
+![screenshot](assets/demo.png)
+![details-view](assets/specs.png)
 
 ---
 
