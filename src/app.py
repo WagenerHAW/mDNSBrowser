@@ -443,6 +443,10 @@ class MDNSBrowser(QMainWindow):
         dialog.layout().addWidget(ok_button)
         dialog.exec()
 
+    def clear_filter(self):
+        self._filter = None
+        self.service_filter.setText("")
+
     def rescan_network(self):
         self.worker.stop()
         self.worker = AsyncZCWorker(self.signals, interface=self.interface_ip)
@@ -450,6 +454,7 @@ class MDNSBrowser(QMainWindow):
         self.service_type_widget.clear()
         self.services.clear()
         self.service_list_widget.clear()
+        self.clear_filter()
         self.worker.start()
 
     def closeEvent(self, event):
