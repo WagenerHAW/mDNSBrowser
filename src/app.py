@@ -223,10 +223,6 @@ class MDNSBrowser(QMainWindow):
         self.rescan_button = QPushButton("Clear and rescan Network")
         self.rescan_button.clicked.connect(self.rescan_network)
 
-        self.auto_discovery_checkbox = QPushButton("Discovery for _services._dns-sd._udp.local. running...")
-        self.auto_discovery_checkbox.setCheckable(True)
-        self.auto_discovery_checkbox.setChecked(True)
-
         self.manual_query_label = QLabel("Manual Service Query:")
         self.manual_query_input = QLineEdit()
         self.manual_query_button = QPushButton("Query Service")
@@ -253,10 +249,13 @@ class MDNSBrowser(QMainWindow):
         main_layout.addLayout(main_h)
         main_layout.addWidget(self.service_filter)
         main_layout.addWidget(self.rescan_button)
-        main_layout.addWidget(self.auto_discovery_checkbox)
         main_layout.addWidget(self.manual_query_label)
-        main_layout.addWidget(self.manual_query_input)
-        main_layout.addWidget(self.manual_query_button)
+
+        manual_h = QHBoxLayout()
+        manual_h.addWidget(self.manual_query_input)
+        manual_h.addWidget(self.manual_query_button)
+
+        main_layout.addLayout(manual_h)
         main_layout.addWidget(self.dante_query_button)
 
         container = QWidget()
