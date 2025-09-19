@@ -10,7 +10,7 @@ Notes:
   missed answers caused by blocking calls.
 - Tested conceptually; adapt to your environment and zeroconf version if necessary.
 
-Author: Assistant (adapted from Thorsten Wagener's original)
+Author: Thorsten Wagener
 Date: 2025-09-18
 License: MIT
 """
