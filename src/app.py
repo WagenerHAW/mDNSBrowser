@@ -148,7 +148,7 @@ class AsyncZCWorker:
     async def _handle_type_state_change(self, service_type, name, state_change):
         try:
             if state_change is ServiceStateChange.Added:
-                info = await self.aiozc.async_get_service_info(service_type, name, timeout=10000)
+                info = await self.aiozc.async_get_service_info(service_type, name, timeout=3000)
                 if info:
                     info_dict = self._serialize_info(info)
                     self.signals.service_added.emit(name, info_dict)
@@ -223,14 +223,13 @@ class MDNSBrowser(QMainWindow):
         self.rescan_button = QPushButton("Clear and rescan Network")
         self.rescan_button.clicked.connect(self.rescan_network)
 
-        self.auto_discovery_checkbox = QPushButton("Discovery for _services._dns-sd._udp.local. running...")
-        self.auto_discovery_checkbox.setCheckable(True)
-        self.auto_discovery_checkbox.setChecked(True)
-
         self.manual_query_label = QLabel("Manual Service Query:")
         self.manual_query_input = QLineEdit()
         self.manual_query_button = QPushButton("Query Service")
         self.manual_query_button.clicked.connect(self.manual_query)
+
+        self.dante_query_button = QPushButton("Add Dante Services")
+        self.dante_query_button.clicked.connect(self.dante_query)
 
         left_layout = QVBoxLayout()
         left_layout.addWidget(self.service_type_widget_hl)
@@ -250,10 +249,14 @@ class MDNSBrowser(QMainWindow):
         main_layout.addLayout(main_h)
         main_layout.addWidget(self.service_filter)
         main_layout.addWidget(self.rescan_button)
-        main_layout.addWidget(self.auto_discovery_checkbox)
         main_layout.addWidget(self.manual_query_label)
-        main_layout.addWidget(self.manual_query_input)
-        main_layout.addWidget(self.manual_query_button)
+
+        manual_h = QHBoxLayout()
+        manual_h.addWidget(self.manual_query_input)
+        manual_h.addWidget(self.manual_query_button)
+
+        main_layout.addLayout(manual_h)
+        main_layout.addWidget(self.dante_query_button)
 
         container = QWidget()
         container.setLayout(main_layout)
@@ -290,10 +293,23 @@ class MDNSBrowser(QMainWindow):
         self.service_filter.setText(f"Filter: {self._filter}")
         self._refresh_service_list()
 
+    def normalize_service_type(self, service: str) -> str:
+        service = service.strip()
+        if not service:
+            return ""
+        if service.endswith(".local."):
+            return service
+        if service.endswith(".local"):
+            return service + "."
+        if service.endswith("."):
+            return service + "local."
+        return service + ".local."
+
     def manual_query(self):
         service_query = self.manual_query_input.text().strip()
         if not service_query:
             return
+        service_query = self.normalize_service_type(service_query)
         if self.worker.loop and self.worker.aiozc:
             try:
                 asyncio.run_coroutine_threadsafe(
@@ -301,6 +317,26 @@ class MDNSBrowser(QMainWindow):
                 )
             except Exception as exc:
                 self._on_error(str(exc))
+
+    def dante_query(self):
+        dante_services = [
+            "_dante-safe._udp",
+            "_dante-upgr._udp",
+            "_netaudio-arc._udp",
+            "_netaudio-chan._udp",
+            "_netaudio-cmc._udp",
+            "_netaudio-dbc._udp",
+            "_dante-ddm-d._udp",
+            "_dante-ddm-c._tcp"
+        ]
+        for service_query in dante_services:
+            if self.worker.loop and self.worker.aiozc:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self._start_manual_browser(service_query+".local."), self.worker.loop
+                    )
+                except Exception as exc:
+                    self._on_error(str(exc))
 
     async def _start_manual_browser(self, service_query: str):
         try:
@@ -381,15 +417,12 @@ class MDNSBrowser(QMainWindow):
             row += 1
 
         props = info.get('properties', {})
-        print(info)
-        if props and len(props) > 0:
-            row_helper = row
-            row += 1
-
+        if props:
+            prop_row = row
             for k, v in props.items():
-                if v is None and k == '':
-                    # if there is a prop b'': None only the headline should be omitted
+                if k == '' and v == None:
                     continue
+                row += 1
                 key_label = QLabel(f"{k}:")
                 val_label = QLabel(str(v))
                 key_label.setStyleSheet(label_css)
@@ -397,13 +430,11 @@ class MDNSBrowser(QMainWindow):
                 val_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 layout.addWidget(key_label, row, 0, Qt.AlignmentFlag.AlignTop)
                 layout.addWidget(val_label, row, 1, Qt.AlignmentFlag.AlignTop)
-                row += 1
-            # if there is a prop '': None only the headline should be omitted
-            if row_helper + 1 < row:
-                prop_head = QLabel("Properties")
-                prop_head.setStyleSheet(head_css)
-                layout.addWidget(prop_head, row_helper, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
 
+            if row > prop_row:
+                prop_head2 = QLabel("Properties")
+                prop_head2.setStyleSheet(head_css)
+                layout.addWidget(prop_head2, prop_row, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
 
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(dialog.accept)
