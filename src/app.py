@@ -387,14 +387,8 @@ class MDNSBrowser(QMainWindow):
             row += 1
 
             for k, v in props.items():
-                try:
-                    if v is None and k is '':
-                        # if there is a prop b'': None only the headline should be omitted
-                        continue
-                    value_str = v #. decode('utf-8')
-                except UnicodeDecodeError:
-                    value_str = v.hex()  # Use hex representation for binary data
-                except AttributeError:
+                if v is None and k == '':
+                    # if there is a prop b'': None only the headline should be omitted
                     continue
                 key_label = QLabel(f"{k}:")
                 val_label = QLabel(str(v))
@@ -404,7 +398,7 @@ class MDNSBrowser(QMainWindow):
                 layout.addWidget(key_label, row, 0, Qt.AlignmentFlag.AlignTop)
                 layout.addWidget(val_label, row, 1, Qt.AlignmentFlag.AlignTop)
                 row += 1
-                # if there is a prop b'': None only the headline should be omitted
+            # if there is a prop '': None only the headline should be omitted
             if row_helper + 1 < row:
                 prop_head = QLabel("Properties")
                 prop_head.setStyleSheet(head_css)
