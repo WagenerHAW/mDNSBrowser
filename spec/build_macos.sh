@@ -10,6 +10,8 @@ if [ -f src/app.py ]; then
       --add-data='src/os_qt_tools.py:.' \
       --hidden-import='zeroconf._utils.ipaddress' \
       --hidden-import='zeroconf._handlers.answers' \
+      --hidden-import='async_upnp_client.search' \
+      --hidden-import='async_upnp_client.ssdp' \
       --icon='assets/default_icon.icns' \
       --name='mDNSBrowser' \
       src/app.py

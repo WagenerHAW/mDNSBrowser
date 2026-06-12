@@ -1,5 +1,5 @@
 """
-Async mDNS Service Browser
+Async mDNS and UPnP Service Browser
 
 Rewritten to use python-zeroconf's asyncio API. Runs an asyncio event loop in a background thread
 and communicates with the PyQt6 main thread using Qt signals so UI updates are thread-safe.
@@ -19,11 +19,13 @@ import socket
 import threading
 import asyncio
 import psutil
+from urllib.parse import urlparse
 from typing import Optional
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QListWidget, QListWidgetItem,
-    QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QLineEdit, QComboBox, QDialog, QGridLayout
+    QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QLineEdit, QComboBox, QDialog, QGridLayout,
+    QTabWidget
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtGui import QIcon
@@ -41,20 +43,27 @@ except Exception:
 from zeroconf.asyncio import AsyncZeroconf, AsyncServiceBrowser
 from zeroconf import ServiceStateChange
 
+try:
+    from async_upnp_client.search import async_search as async_upnp_search
+    from async_upnp_client.ssdp import SSDP_ST_ALL
+except ImportError:
+    async_upnp_search = None
+    SSDP_ST_ALL = "ssdp:all"
+
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
 class AsyncZCSignals(QObject):
-    service_type_found = pyqtSignal(str)
+    service_type_found = pyqtSignal(str, str)
     service_added = pyqtSignal(str, dict)
     service_removed = pyqtSignal(str)
     error = pyqtSignal(str)
 
 
 class AsyncZCWorker:
-    """Runs an asyncio loop in a background thread, manages AsyncZeroconf and browser tasks."""
+    """Runs an asyncio loop in a background thread, manages mDNS and UPnP discovery."""
 
     def __init__(self, signals: AsyncZCSignals, interface: Optional[str] = None):
         self.signals = signals
@@ -63,6 +72,7 @@ class AsyncZCWorker:
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.aiozc: Optional[AsyncZeroconf] = None
         self._stop_event = threading.Event()
+        self._upnp_task: Optional[asyncio.Task] = None
 
     def start(self):
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -112,12 +122,108 @@ class AsyncZCWorker:
             return
 
         enum_browser = AsyncServiceBrowser(self.aiozc.zeroconf, "_services._dns-sd._udp.local.", handlers=[self._on_service_discovered])
+        self._upnp_task = asyncio.create_task(self._upnp_search_loop())
 
         while not self._stop_event.is_set():
             await asyncio.sleep(0.5)
 
+        if self._upnp_task:
+            self._upnp_task.cancel()
+            try:
+                await self._upnp_task
+            except asyncio.CancelledError:
+                pass
         await enum_browser.async_cancel()
         await self.aiozc.async_close()
+
+    async def _upnp_search_loop(self):
+        if async_upnp_search is None:
+            self.signals.error.emit("UPnP discovery requires async-upnp-client. Install dependencies and restart the app.")
+            return
+
+        source = (self.interface, 0) if self.interface else None
+
+        error_reported = False
+        while not self._stop_event.is_set():
+            try:
+                await async_upnp_search(
+                    async_callback=self._on_upnp_device,
+                    timeout=3,
+                    search_target=SSDP_ST_ALL,
+                    source=source,
+                    loop=self.loop,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("UPnP discovery failed: %s", exc)
+                if not error_reported:
+                    self.signals.error.emit(f"UPnP discovery failed: {exc}")
+                    error_reported = True
+
+            for _ in range(60):
+                if self._stop_event.is_set():
+                    return
+                await asyncio.sleep(0.5)
+
+    async def _on_upnp_device(self, headers):
+        try:
+            info = self._serialize_upnp_headers(headers)
+            self.signals.service_type_found.emit(info['protocol'], info['type'])
+            self.signals.service_added.emit(info['name'], info)
+        except Exception:
+            logger.exception("Error processing UPnP device")
+
+    def _upnp_header(self, headers, key: str, default: str = ""):
+        try:
+            value = headers.get_lower(key.lower(), default)
+        except AttributeError:
+            value = headers.get(key, headers.get(key.lower(), headers.get(key.upper(), default)))
+        return default if value is None else value
+
+    def _serialize_upnp_headers(self, headers):
+        location = str(self._upnp_header(headers, "location"))
+        usn = str(self._upnp_header(headers, "usn"))
+        st = str(self._upnp_header(headers, "st", "ssdp:all"))
+        server = str(self._upnp_header(headers, "server"))
+        remote_addr = self._upnp_header(headers, "_remote_addr", "")
+
+        parsed_location = urlparse(location)
+        try:
+            port = parsed_location.port
+        except ValueError:
+            port = None
+        host = parsed_location.netloc or parsed_location.path
+        name = usn or location or str(remote_addr)
+        service_type = st
+
+        props = {}
+        try:
+            items = headers.items()
+        except AttributeError:
+            items = []
+        for key, value in items:
+            props[str(key)] = str(value)
+
+        addresses = []
+        if host:
+            addresses.append(host)
+        if location:
+            addresses.append(location)
+        if remote_addr:
+            addresses.append(str(remote_addr))
+
+        return {
+            'name': name,
+            'type': service_type,
+            'protocol': 'UPnP',
+            'addresses': addresses,
+            'port': port,
+            'weight': None,
+            'priority': None,
+            'server': server,
+            'properties': props,
+        }
 
     def _on_service_discovered(self, zeroconf, service_type, name, state_change):
         if self.loop is None:
@@ -130,7 +236,7 @@ class AsyncZCWorker:
                 short_name = name
                 if len(short_name.split('.')) > 4:
                     short_name = '.'.join(short_name.split('.')[-4:])
-                self.signals.service_type_found.emit(short_name)
+                self.signals.service_type_found.emit("mDNS", short_name)
                 try:
                     _ = AsyncServiceBrowser(self.aiozc.zeroconf, short_name, handlers=[self._on_type_state_change])
                 except Exception as exc:
@@ -183,6 +289,7 @@ class AsyncZCWorker:
         return {
             'name': info.name,
             'type': info.type,
+            'protocol': 'mDNS',
             'addresses': addresses,
             'port': int(info.port),
             'weight': getattr(info, 'weight', None),
@@ -195,13 +302,16 @@ class AsyncZCWorker:
 class MDNSBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('mDNS Service Browser')
+        self.setWindowTitle('mDNS and UPnP Service Browser')
         self.setGeometry(100, 100, 1024, 768)
 
         self.interface_ip = None
-        self.service_types = set()
-        self.services = {}
-        self._filter = ""
+        self.service_types = {"mDNS": set(), "UPnP": set()}
+        self.services = {"mDNS": {}, "UPnP": {}}
+        self._filters = {"mDNS": "", "UPnP": ""}
+        self.type_widgets = {}
+        self.list_widgets = {}
+        self.filter_labels = {}
 
         self.interface_selector = QComboBox()
         self.interface_selector.addItem("All interfaces", userData=None)
@@ -211,52 +321,32 @@ class MDNSBrowser(QMainWindow):
                     self.interface_selector.addItem(f"{iface} ({addr.address})", userData=addr.address)
         self.interface_selector.currentIndexChanged.connect(self.interface_changed)
 
-        self.service_type_widget_hl = QLabel('Query results:')
-        self.service_type_widget = QListWidget()
-        self.service_filter = QLabel("Filter:")
-        self.service_list_widget_hl = QLabel('Services:')
-        self.service_list_widget = QListWidget()
+        self.manual_query_label = QLabel("Manual mDNS Service Query:")
+        self.manual_query_input = QLineEdit()
+        self.manual_query_button = QPushButton("Query mDNS Service")
+        self.manual_query_button.clicked.connect(self.manual_query)
 
-        self.service_type_widget.itemClicked.connect(self.set_service_filter)
-        self.service_list_widget.itemClicked.connect(self.show_info)
+        self.dante_query_button = QPushButton("Add Dante mDNS Services")
+        self.dante_query_button.clicked.connect(self.dante_query)
+
+        self.discovery_tabs = QTabWidget()
+        self.discovery_tabs.addTab(
+            self._create_discovery_tab("mDNS", "mDNS service types:", "mDNS services:"),
+            "mDNS",
+        )
+        self.discovery_tabs.addTab(
+            self._create_discovery_tab("UPnP", "UPnP device types:", "UPnP devices:"),
+            "UPnP",
+        )
 
         self.rescan_button = QPushButton("Clear and rescan Network")
         self.rescan_button.clicked.connect(self.rescan_network)
 
-        self.manual_query_label = QLabel("Manual Service Query:")
-        self.manual_query_input = QLineEdit()
-        self.manual_query_button = QPushButton("Query Service")
-        self.manual_query_button.clicked.connect(self.manual_query)
-
-        self.dante_query_button = QPushButton("Add Dante Services")
-        self.dante_query_button.clicked.connect(self.dante_query)
-
-        left_layout = QVBoxLayout()
-        left_layout.addWidget(self.service_type_widget_hl)
-        left_layout.addWidget(self.service_type_widget)
-
-        right_layout = QVBoxLayout()
-        right_layout.addWidget(self.service_list_widget_hl)
-        right_layout.addWidget(self.service_list_widget)
-
-        main_h = QHBoxLayout()
-        main_h.addLayout(left_layout)
-        main_h.addLayout(right_layout)
-
         main_layout = QVBoxLayout()
         main_layout.addWidget(QLabel("Select Network Interface:"))
         main_layout.addWidget(self.interface_selector)
-        main_layout.addLayout(main_h)
-        main_layout.addWidget(self.service_filter)
+        main_layout.addWidget(self.discovery_tabs)
         main_layout.addWidget(self.rescan_button)
-        main_layout.addWidget(self.manual_query_label)
-
-        manual_h = QHBoxLayout()
-        manual_h.addWidget(self.manual_query_input)
-        manual_h.addWidget(self.manual_query_button)
-
-        main_layout.addLayout(manual_h)
-        main_layout.addWidget(self.dante_query_button)
 
         container = QWidget()
         container.setLayout(main_layout)
@@ -271,27 +361,72 @@ class MDNSBrowser(QMainWindow):
         self.worker = AsyncZCWorker(self.signals, interface=self.interface_ip)
         self.worker.start()
 
+    def _create_discovery_tab(self, protocol: str, type_header: str, list_header: str):
+        type_widget = QListWidget()
+        list_widget = QListWidget()
+        filter_label = QLabel("Filter:")
+
+        type_widget.currentItemChanged.connect(
+            lambda current, previous, protocol=protocol: self.set_service_filter(protocol, current, previous)
+        )
+        list_widget.itemClicked.connect(self.show_info)
+
+        self.type_widgets[protocol] = type_widget
+        self.list_widgets[protocol] = list_widget
+        self.filter_labels[protocol] = filter_label
+
+        left_layout = QVBoxLayout()
+        left_layout.addWidget(QLabel(type_header))
+        left_layout.addWidget(type_widget)
+
+        right_layout = QVBoxLayout()
+        right_layout.addWidget(QLabel(list_header))
+        right_layout.addWidget(list_widget)
+
+        lists_layout = QHBoxLayout()
+        lists_layout.addLayout(left_layout)
+        lists_layout.addLayout(right_layout)
+
+        tab_layout = QVBoxLayout()
+        tab_layout.addLayout(lists_layout)
+        tab_layout.addWidget(filter_label)
+        if protocol == "mDNS":
+            manual_layout = QHBoxLayout()
+            manual_layout.addWidget(self.manual_query_input)
+            manual_layout.addWidget(self.manual_query_button)
+
+            tab_layout.addWidget(self.manual_query_label)
+            tab_layout.addLayout(manual_layout)
+            tab_layout.addWidget(self.dante_query_button)
+
+        tab = QWidget()
+        tab.setLayout(tab_layout)
+        return tab
+
     def interface_changed(self):
         self.interface_ip = self.interface_selector.currentData()
         logger.info(f"Selected interface: {self.interface_ip or 'All interfaces'}")
         self.worker.stop()
         self.worker = AsyncZCWorker(self.signals, interface=self.interface_ip)
-        self.service_types.clear()
-        self.service_type_widget.clear()
-        self.services.clear()
-        self.service_list_widget.clear()
+        self.clear_discovery_results()
         self.worker.start()
 
-    def set_service_filter(self, list_item: QListWidgetItem):
+    def set_service_filter(
+        self,
+        protocol: str,
+        list_item: Optional[QListWidgetItem],
+        _previous_item: Optional[QListWidgetItem] = None,
+    ):
+        if list_item is None:
+            self._filters[protocol] = ""
+            self.filter_labels[protocol].setText("Filter:")
+            self._refresh_service_list(protocol)
+            return
+
         selected_text = list_item.text()
-        if self._filter == selected_text:
-            self._filter = ""
-            list_item.setSelected(False)
-            self.service_list_widget.clear()
-        else:
-            self._filter = selected_text
-        self.service_filter.setText(f"Filter: {self._filter}")
-        self._refresh_service_list()
+        self._filters[protocol] = selected_text
+        self.filter_labels[protocol].setText(f"Filter: {self._filters[protocol]}")
+        self._refresh_service_list(protocol)
 
     def normalize_service_type(self, service: str) -> str:
         service = service.strip()
@@ -343,24 +478,29 @@ class MDNSBrowser(QMainWindow):
             if service_query == "_services._dns-sd._udp.local.":
                 return
             AsyncServiceBrowser(self.worker.aiozc.zeroconf, service_query, handlers=[self.worker._on_type_state_change])
-            self.signals.service_type_found.emit(service_query)
+            self.signals.service_type_found.emit("mDNS", service_query)
         except Exception as exc:
             self.signals.error.emit(str(exc))
 
-    def _on_service_type_found(self, type_str: str):
-        if type_str not in self.service_types:
-            self.service_types.add(type_str)
-            self.service_type_widget.addItem(type_str)
-            self.service_type_widget.sortItems()
+    def _on_service_type_found(self, protocol: str, type_str: str):
+        if protocol not in self.service_types:
+            return
+        if type_str not in self.service_types[protocol]:
+            self.service_types[protocol].add(type_str)
+            self.type_widgets[protocol].addItem(type_str)
+            self.type_widgets[protocol].sortItems()
 
     def _on_service_added(self, name: str, info: dict):
-        self.services[name] = info
-        self._refresh_service_list()
+        protocol = info.get('protocol', 'mDNS')
+        if protocol not in self.services:
+            return
+        self.services[protocol][name] = info
+        self._refresh_service_list(protocol)
 
     def _on_service_removed(self, name: str):
-        if name in self.services:
-            del self.services[name]
-        self._refresh_service_list()
+        if name in self.services["mDNS"]:
+            del self.services["mDNS"][name]
+        self._refresh_service_list("mDNS")
 
     def _on_error(self, message: str):
         dialog = QDialog(self)
@@ -373,15 +513,17 @@ class MDNSBrowser(QMainWindow):
         dialog.setLayout(layout)
         dialog.exec()
 
-    def _refresh_service_list(self):
-        self.service_list_widget.clear()
-        for name, info in sorted(self.services.items()):
-            if self._filter and self._filter not in info.get('type', ''):
+    def _refresh_service_list(self, protocol: str):
+        list_widget = self.list_widgets[protocol]
+        active_filter = self._filters[protocol]
+        list_widget.clear()
+        for name, info in sorted(self.services[protocol].items()):
+            if active_filter and active_filter not in info.get('type', ''):
                 continue
             item = QListWidgetItem(name)
             item.setData(Qt.ItemDataRole.UserRole, info)
-            self.service_list_widget.addItem(item)
-        self.service_list_widget.sortItems()
+            list_widget.addItem(item)
+        list_widget.sortItems()
 
     def show_info(self, list_item: QListWidgetItem):
         info = list_item.data(Qt.ItemDataRole.UserRole)
@@ -401,10 +543,13 @@ class MDNSBrowser(QMainWindow):
         row += 1
 
         content = {
+            'Protocol:': info.get('protocol', ''),
+            'Type:': info.get('type', ''),
             'Server:': info.get('server', ''),
-            'IP address:': '\n'.join(info.get('addresses', [])),
-            'Loadbalance:': f"Priority: {info.get('priority')} weight: {info.get('weight')}"
+            'Address / location:': '\n'.join(info.get('addresses', [])),
         }
+        if info.get('priority') is not None or info.get('weight') is not None:
+            content['Loadbalance:'] = f"Priority: {info.get('priority')} weight: {info.get('weight')}"
 
         for label_text, value_text in content.items():
             label = QLabel(label_text)
@@ -443,18 +588,22 @@ class MDNSBrowser(QMainWindow):
         dialog.layout().addWidget(ok_button)
         dialog.exec()
 
-    def clear_filter(self):
-        self._filter = None
-        self.service_filter.setText("Filter:")
+    def clear_filter(self, protocol: str):
+        self._filters[protocol] = ""
+        self.filter_labels[protocol].setText("Filter:")
+
+    def clear_discovery_results(self):
+        for protocol in self.services:
+            self.service_types[protocol].clear()
+            self.type_widgets[protocol].clear()
+            self.services[protocol].clear()
+            self.list_widgets[protocol].clear()
+            self.clear_filter(protocol)
 
     def rescan_network(self):
         self.worker.stop()
         self.worker = AsyncZCWorker(self.signals, interface=self.interface_ip)
-        self.service_types.clear()
-        self.service_type_widget.clear()
-        self.services.clear()
-        self.service_list_widget.clear()
-        self.clear_filter()
+        self.clear_discovery_results()
         self.worker.start()
 
     def closeEvent(self, event):

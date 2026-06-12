@@ -1,7 +1,7 @@
-# mDNS Service Browser (Async, PyQt6)
+# mDNS and UPnP Service Browser (Async, PyQt6)
 
-A cross-platform **mDNS / DNS-SD service discovery tool** built with **PyQt6** and Python’s **asyncio Zeroconf API**.  
-It allows you to browse, filter, and inspect network services (including **Dante audio devices**) in real time.
+A cross-platform **mDNS / DNS-SD and UPnP / SSDP service discovery tool** built with **PyQt6**, Python’s **asyncio Zeroconf API**, and `async-upnp-client`.
+It allows you to browse, filter, and inspect network services and UPnP devices (including **Dante audio devices**) in real time.
 
 ![screenshot](assets/demo.png)
 ![details-view](assets/specs.png)
@@ -11,8 +11,9 @@ It allows you to browse, filter, and inspect network services (including **Dante
 ## ✨ Features
 
 - 🔍 **Automatic discovery** of all mDNS service types (`_services._dns-sd._udp.local.`)  
-- 🎚️ **Filter and browse** discovered service instances per type  
-- 📜 **Detailed service info** including addresses, TXT properties, priority, weight  
+- 📡 **UPnP / SSDP discovery** for devices such as media renderers, routers, and smart devices
+- 🎚️ **Filter and browse** mDNS services and UPnP devices in separate tabs
+- 📜 **Detailed service info** including addresses, TXT properties, SSDP headers, priority, weight
 - 🌐 **Interface selection** – scan on a specific interface or all interfaces  
 - 🔄 **Rescan & refresh** with one click  
 - 📝 **Manual service query** with auto-correction for `.local.` suffix  
@@ -26,6 +27,7 @@ It allows you to browse, filter, and inspect network services (including **Dante
 ### Requirements
 - Python **3.9+**
 - [python-zeroconf](https://github.com/jstasiak/python-zeroconf) (newer versions with `AsyncZeroconf`)
+- [async-upnp-client](https://github.com/StevenLooman/async_upnp_client)
 - [PyQt6](https://pypi.org/project/PyQt6/)
 - [psutil](https://pypi.org/project/psutil/)
 
@@ -47,18 +49,19 @@ python src/app.py
 or build an executable with the spec files 
 
 ### Basic workflow
-1. Select an interface (`All interfaces` or a specific adapter/IP).  
-2. Watch available **service types** appear in the left panel.  
-3. Select a type to filter and view discovered **services** on the right panel.  
-4. Click a service to open a detailed info dialog with TXT records.  
-5. Use **Manual Query** to search for a service type (input auto-corrects `.local.`).  
-6. Use **Query Dante Services** to automatically query common Dante services. (Because some Dante devices don't respond on the default service query)  
+1. Select an interface (`All interfaces` or a specific adapter/IP).
+2. Use the **mDNS** and **UPnP** tabs to switch between discovery methods.
+3. Select a type to filter and view discovered **services or devices** on the right panel.
+4. Click a service to open a detailed info dialog with TXT records or SSDP headers.
+5. In the **mDNS** tab, use **Manual mDNS Service Query** to search for a service type (input auto-corrects `.local.`).
+6. In the **mDNS** tab, use **Add Dante mDNS Services** to query common Dante services.
 
 ---
 
 ## 🛠️ Development Notes
 
-- Uses `AsyncZeroconf` for async service browsing.  
+- Uses `AsyncZeroconf` for async mDNS service browsing.
+- Uses `async-upnp-client` to run recurring `ssdp:all` searches for UPnP devices.
 - Runs an `asyncio` event loop in a background thread.  
 - Communicates with the PyQt6 main thread via Qt signals for **thread-safe UI updates**.  
 - Service resolution uses `async_get_service_info()` with a timeout of **3s**, retriable if needed.  

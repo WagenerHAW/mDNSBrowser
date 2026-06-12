@@ -9,6 +9,7 @@ readme = "README.md"
 python = "^3.11"
 pyqt6 = "^6.7.1"
 zeroconf = "^0.134.0"
+async-upnp-client = "^0.47.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.3"
