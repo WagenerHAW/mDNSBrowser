@@ -241,3 +241,7 @@ cython_debug/
 
 poetry.lock
 
+
+.DS_Store
+builds
+build
