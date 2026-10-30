@@ -18,6 +18,7 @@ import sys
 import socket
 import threading
 import asyncio
+from ipaddress import IPv4Address
 import psutil
 from urllib.parse import urlparse
 from typing import Optional
@@ -25,14 +26,26 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QListWidget, QListWidgetItem,
     QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QLineEdit, QComboBox, QDialog, QGridLayout,
-    QTabWidget
+    QTabWidget, QScrollArea
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtGui import QIcon
 
+if __package__:
+    from .upnp import (
+        parse_upnp_description, upnp_device_title, upnp_device_summary, upnp_type_label,
+    )
+else:
+    from upnp import (
+        parse_upnp_description, upnp_device_title, upnp_device_summary, upnp_type_label,
+    )
+
 # Keep your resource helpers if you have them
 try:
-    from os_qt_tools import *
+    if __package__:
+        from .os_qt_tools import get_os_logo, resource_path
+    else:
+        from os_qt_tools import get_os_logo, resource_path
 except Exception:
     def resource_path(p):
         return p
@@ -44,10 +57,13 @@ from zeroconf.asyncio import AsyncZeroconf, AsyncServiceBrowser
 from zeroconf import ServiceStateChange
 
 try:
-    from async_upnp_client.search import async_search as async_upnp_search
+    from async_upnp_client.search import SsdpSearchListener
     from async_upnp_client.ssdp import SSDP_ST_ALL
+    from async_upnp_client.aiohttp import AiohttpRequester
+    from async_upnp_client.const import HttpRequest
 except ImportError:
-    async_upnp_search = None
+    SsdpSearchListener = None
+    AiohttpRequester = None
     SSDP_ST_ALL = "ssdp:all"
 
 import logging
@@ -73,6 +89,11 @@ class AsyncZCWorker:
         self.aiozc: Optional[AsyncZeroconf] = None
         self._stop_event = threading.Event()
         self._upnp_task: Optional[asyncio.Task] = None
+        self._upnp_requester = AiohttpRequester(timeout=4) if AiohttpRequester else None
+        self._upnp_descriptions = {}
+        self._upnp_description_tasks = {}
+        self._upnp_callbacks = set()
+        self._upnp_description_semaphore = None
 
     def start(self):
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -80,21 +101,10 @@ class AsyncZCWorker:
 
     def stop(self):
         self._stop_event.set()
-        if self.loop and self.loop.is_running():
-            fut = asyncio.run_coroutine_threadsafe(self._shutdown(), self.loop)
-            try:
-                fut.result(timeout=5)
-            except Exception as exc:
-                logger.exception("Error while shutting down async zeroconf: %s", exc)
+        # _main owns cleanup. Closing Zeroconf from a second coroutine races
+        # with _main finishing and can leave a shutdown future on a stopped loop.
         if self.thread:
             self.thread.join(timeout=5)
-
-    async def _shutdown(self):
-        try:
-            if self.aiozc:
-                await self.aiozc.async_close()
-        except Exception as exc:
-            logger.error("Error in AsyncZCWorker._shutdown: %s", exc)
 
     def _run_loop(self):
         self.loop = asyncio.new_event_loop()
@@ -133,26 +143,74 @@ class AsyncZCWorker:
                 await self._upnp_task
             except asyncio.CancelledError:
                 pass
+        await self._cancel_upnp_resolution()
         await enum_browser.async_cancel()
         await self.aiozc.async_close()
 
+    def _upnp_search_sources(self):
+        if self.interface:
+            return [(self.interface, 0)]
+
+        sources = set()
+        stats = psutil.net_if_stats()
+        for name, addresses in psutil.net_if_addrs().items():
+            interface = stats.get(name)
+            if interface is None or not interface.isup:
+                continue
+            flags = set(getattr(interface, 'flags', '').lower().split(',')) - {''}
+            if flags and 'multicast' not in flags:
+                continue
+            for address in addresses:
+                if address.family != socket.AF_INET:
+                    continue
+                ip = IPv4Address(address.address)
+                if not ip.is_loopback and not ip.is_unspecified:
+                    sources.add((address.address, 0))
+        return sorted(sources)
+
+    async def _search_upnp_interface(self, source):
+        listener = SsdpSearchListener(
+            async_callback=self._on_upnp_device,
+            timeout=3,
+            search_target=SSDP_ST_ALL,
+            source=source,
+            loop=self.loop,
+        )
+        try:
+            await listener.async_start()
+            listener.async_search()
+            await asyncio.sleep(3)
+        finally:
+            # The convenience async_search() does not close its transport when
+            # cancelled. Own the listener so switching interfaces closes every
+            # search socket, including searches still waiting for responses.
+            listener.async_stop()
+
     async def _upnp_search_loop(self):
-        if async_upnp_search is None:
+        if SsdpSearchListener is None:
             self.signals.error.emit("UPnP discovery requires async-upnp-client. Install dependencies and restart the app.")
             return
-
-        source = (self.interface, 0) if self.interface else None
 
         error_reported = False
         while not self._stop_event.is_set():
             try:
-                await async_upnp_search(
-                    async_callback=self._on_upnp_device,
-                    timeout=3,
-                    search_target=SSDP_ST_ALL,
-                    source=source,
-                    loop=self.loop,
+                # A wildcard SSDP source only follows the default multicast
+                # route. Explicit sources are needed to reach every network.
+                # Refresh the list each pass to handle adapter changes.
+                sources = self._upnp_search_sources()
+                if not sources:
+                    raise RuntimeError("No active IPv4 multicast interfaces are available")
+                results = await asyncio.gather(
+                    *(self._search_upnp_interface(source) for source in sources),
+                    return_exceptions=True,
                 )
+                failures = [(source, result) for source, result in zip(sources, results)
+                            if isinstance(result, Exception)]
+                for source, error in failures:
+                    logger.warning("UPnP discovery failed on %s: %s", source[0], error)
+                if len(failures) == len(sources):
+                    raise RuntimeError("Search failed on every selected interface")
+                error_reported = False
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -167,12 +225,81 @@ class AsyncZCWorker:
                 await asyncio.sleep(0.5)
 
     async def _on_upnp_device(self, headers):
+        if self._stop_event.is_set():
+            return
+        callback = asyncio.current_task()
+        self._upnp_callbacks.add(callback)
         try:
             info = self._serialize_upnp_headers(headers)
             self.signals.service_type_found.emit(info['protocol'], info['type'])
             self.signals.service_added.emit(info['name'], info)
+
+            descriptions = await self._get_upnp_description(info['location'])
+            udn = info['udn'].casefold()
+            metadata = next(
+                (device for device in descriptions if udn and device.get('udn', '').casefold() == udn),
+                None,
+            )
+            # Some older devices omit UDN entirely. Never give an unmatched
+            # embedded device the root device's name just because the URL matches.
+            if metadata is None and descriptions and (not udn or not descriptions[0].get('udn')):
+                metadata = descriptions[0]
+            if metadata and not self._stop_event.is_set():
+                enriched = {**info, **metadata}
+                if metadata.get('device_type'):
+                    self.signals.service_type_found.emit('UPnP', metadata['device_type'])
+                self.signals.service_added.emit(info['name'], enriched)
         except Exception:
             logger.exception("Error processing UPnP device")
+        finally:
+            self._upnp_callbacks.discard(callback)
+
+    async def _get_upnp_description(self, location):
+        if not self._upnp_requester or urlparse(location).scheme not in ('http', 'https'):
+            return []
+        now = asyncio.get_running_loop().time()
+        cached = self._upnp_descriptions.get(location)
+        if cached and cached[0] > now:
+            return cached[1]
+        task = self._upnp_description_tasks.get(location)
+        if task is None:
+            task = asyncio.create_task(self._load_upnp_description(location))
+            self._upnp_description_tasks[location] = task
+        try:
+            return await asyncio.shield(task)
+        finally:
+            if task.done() and self._upnp_description_tasks.get(location) is task:
+                self._upnp_description_tasks.pop(location, None)
+
+    async def _load_upnp_description(self, location):
+        if self._upnp_description_semaphore is None:
+            self._upnp_description_semaphore = asyncio.Semaphore(4)
+        descriptions = []
+        async with self._upnp_description_semaphore:
+            try:
+                response = await self._upnp_requester.async_http_request(
+                    HttpRequest('GET', location, {}, None)
+                )
+                if response.status_code != 200:
+                    raise ValueError(f"HTTP {response.status_code}")
+                descriptions = parse_upnp_description(response.body or '')
+            except Exception as exc:
+                logger.debug("Could not read UPnP description at %s: %s", location, exc)
+        # Reuse successful descriptions for five minutes; retry failures on a
+        # later discovery pass. Repeated SSDP packets share one in-flight request.
+        ttl = 300 if descriptions else 30
+        self._upnp_descriptions[location] = (asyncio.get_running_loop().time() + ttl, descriptions)
+        return descriptions
+
+    async def _cancel_upnp_resolution(self):
+        current = asyncio.current_task()
+        tasks = set(self._upnp_description_tasks.values()) | self._upnp_callbacks
+        tasks.discard(current)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._upnp_description_tasks.clear()
 
     def _upnp_header(self, headers, key: str, default: str = ""):
         try:
@@ -194,7 +321,8 @@ class AsyncZCWorker:
         except ValueError:
             port = None
         host = parsed_location.netloc or parsed_location.path
-        name = usn or location or str(remote_addr)
+        udn = usn.split('::', 1)[0] if usn.lower().startswith('uuid:') else ''
+        name = udn.casefold() or usn or location or str(remote_addr)
         service_type = st
 
         props = {}
@@ -217,6 +345,10 @@ class AsyncZCWorker:
             'name': name,
             'type': service_type,
             'protocol': 'UPnP',
+            'udn': udn,
+            'host': host or (str(remote_addr[0]) if isinstance(remote_addr, tuple) else str(remote_addr)),
+            'location': location,
+            'usn': usn,
             'addresses': addresses,
             'port': port,
             'weight': None,
@@ -226,7 +358,7 @@ class AsyncZCWorker:
         }
 
     def _on_service_discovered(self, zeroconf, service_type, name, state_change):
-        if self.loop is None:
+        if self.loop is None or self._stop_event.is_set():
             return
         asyncio.run_coroutine_threadsafe(self._handle_discovered(service_type, name, state_change), self.loop)
 
@@ -247,7 +379,7 @@ class AsyncZCWorker:
             logger.exception("Error processing discovered service")
 
     def _on_type_state_change(self, zeroconf, service_type, name, state_change):
-        if self.loop is None:
+        if self.loop is None or self._stop_event.is_set():
             return
         asyncio.run_coroutine_threadsafe(self._handle_type_state_change(service_type, name, state_change), self.loop)
 
@@ -312,6 +444,10 @@ class MDNSBrowser(QMainWindow):
         self.type_widgets = {}
         self.list_widgets = {}
         self.filter_labels = {}
+        self.upnp_search_input = QLineEdit()
+        self.upnp_search_input.setPlaceholderText("Search by name, model, manufacturer or address…")
+        self.upnp_search_input.setClearButtonEnabled(True)
+        self.upnp_search_input.textChanged.connect(lambda: self._refresh_service_list('UPnP'))
 
         self.interface_selector = QComboBox()
         self.interface_selector.addItem("All interfaces", userData=None)
@@ -335,7 +471,7 @@ class MDNSBrowser(QMainWindow):
             "mDNS",
         )
         self.discovery_tabs.addTab(
-            self._create_discovery_tab("UPnP", "UPnP device types:", "UPnP devices:"),
+            self._create_discovery_tab("UPnP", "UPnP device / service types:", "UPnP devices:"),
             "UPnP",
         )
 
@@ -374,6 +510,8 @@ class MDNSBrowser(QMainWindow):
         self.type_widgets[protocol] = type_widget
         self.list_widgets[protocol] = list_widget
         self.filter_labels[protocol] = filter_label
+        if protocol == 'UPnP':
+            self._add_upnp_all_devices_item()
 
         left_layout = QVBoxLayout()
         left_layout.addWidget(QLabel(type_header))
@@ -381,11 +519,13 @@ class MDNSBrowser(QMainWindow):
 
         right_layout = QVBoxLayout()
         right_layout.addWidget(QLabel(list_header))
+        if protocol == 'UPnP':
+            right_layout.addWidget(self.upnp_search_input)
         right_layout.addWidget(list_widget)
 
         lists_layout = QHBoxLayout()
-        lists_layout.addLayout(left_layout)
-        lists_layout.addLayout(right_layout)
+        lists_layout.addLayout(left_layout, 1)
+        lists_layout.addLayout(right_layout, 2 if protocol == 'UPnP' else 1)
 
         tab_layout = QVBoxLayout()
         tab_layout.addLayout(lists_layout)
@@ -402,6 +542,12 @@ class MDNSBrowser(QMainWindow):
         tab = QWidget()
         tab.setLayout(tab_layout)
         return tab
+
+    def _add_upnp_all_devices_item(self):
+        item = QListWidgetItem("All devices")
+        item.setData(Qt.ItemDataRole.UserRole, '')
+        self.type_widgets['UPnP'].insertItem(0, item)
+        self.type_widgets['UPnP'].setCurrentItem(item)
 
     def interface_changed(self):
         self.interface_ip = self.interface_selector.currentData()
@@ -423,9 +569,9 @@ class MDNSBrowser(QMainWindow):
             self._refresh_service_list(protocol)
             return
 
-        selected_text = list_item.text()
-        self._filters[protocol] = selected_text
-        self.filter_labels[protocol].setText(f"Filter: {self._filters[protocol]}")
+        selected_type = list_item.data(Qt.ItemDataRole.UserRole) if protocol == 'UPnP' else list_item.text()
+        self._filters[protocol] = selected_type
+        self.filter_labels[protocol].setText(f"Filter: {list_item.text()}")
         self._refresh_service_list(protocol)
 
     def normalize_service_type(self, service: str) -> str:
@@ -485,15 +631,40 @@ class MDNSBrowser(QMainWindow):
     def _on_service_type_found(self, protocol: str, type_str: str):
         if protocol not in self.service_types:
             return
+        if protocol == 'UPnP' and (not type_str or type_str.lower().startswith('uuid:') or type_str == SSDP_ST_ALL):
+            return
         if type_str not in self.service_types[protocol]:
             self.service_types[protocol].add(type_str)
-            self.type_widgets[protocol].addItem(type_str)
-            self.type_widgets[protocol].sortItems()
+            type_widget = self.type_widgets[protocol]
+            if protocol == 'UPnP':
+                item = QListWidgetItem(upnp_type_label(type_str))
+                item.setData(Qt.ItemDataRole.UserRole, type_str)
+                item.setToolTip(type_str)
+                # Keep "All devices" pinned above the sorted, readable types.
+                row = 1
+                while row < type_widget.count() and type_widget.item(row).text().casefold() < item.text().casefold():
+                    row += 1
+                type_widget.insertItem(row, item)
+            else:
+                type_widget.addItem(type_str)
+                type_widget.sortItems()
 
     def _on_service_added(self, name: str, info: dict):
         protocol = info.get('protocol', 'mDNS')
         if protocol not in self.services:
             return
+        if protocol == 'UPnP':
+            previous = self.services[protocol].get(name, {})
+            types = set(previous.get('types', []))
+            types.update(filter(None, (info.get('type'), info.get('device_type'))))
+            advertisements = dict(previous.get('advertisements', {}))
+            advertisements[info.get('usn') or info.get('type', '')] = info.get('properties', {})
+            info = {
+                **previous,
+                **info,
+                'types': sorted(types),
+                'advertisements': advertisements,
+            }
         self.services[protocol][name] = info
         self._refresh_service_list(protocol)
 
@@ -516,14 +687,35 @@ class MDNSBrowser(QMainWindow):
     def _refresh_service_list(self, protocol: str):
         list_widget = self.list_widgets[protocol]
         active_filter = self._filters[protocol]
+        selected = list_widget.currentItem()
+        selected_name = selected.data(Qt.ItemDataRole.UserRole).get('name') if selected else None
+        scroll_position = list_widget.verticalScrollBar().value()
         list_widget.clear()
-        for name, info in sorted(self.services[protocol].items()):
-            if active_filter and active_filter not in info.get('type', ''):
-                continue
-            item = QListWidgetItem(name)
+        services = self.services[protocol].items()
+        if protocol == 'UPnP':
+            services = sorted(services, key=lambda entry: (upnp_device_title(entry[1]).casefold(), entry[0]))
+        else:
+            services = sorted(services)
+        for name, info in services:
+            if protocol == 'UPnP':
+                if active_filter and active_filter not in info.get('types', []):
+                    continue
+                title = upnp_device_title(info)
+                summary = upnp_device_summary(info)
+                search = self.upnp_search_input.text().strip().casefold()
+                if search and search not in ' '.join((title, summary, name, info.get('location', ''))).casefold():
+                    continue
+                item = QListWidgetItem(f"{title}\n{summary}")
+                item.setToolTip('\n'.join(filter(None, (title, summary, info.get('udn'), info.get('location')))))
+            else:
+                if active_filter and active_filter not in info.get('type', ''):
+                    continue
+                item = QListWidgetItem(name)
             item.setData(Qt.ItemDataRole.UserRole, info)
             list_widget.addItem(item)
-        list_widget.sortItems()
+            if info.get('name') == selected_name:
+                list_widget.setCurrentItem(item)
+        list_widget.verticalScrollBar().setValue(scroll_position)
 
     def show_info(self, list_item: QListWidgetItem):
         info = list_item.data(Qt.ItemDataRole.UserRole)
@@ -537,7 +729,9 @@ class MDNSBrowser(QMainWindow):
         value_css = "background-color: rgba(0, 0, 0, 200); color: #ccc; padding: 6px;"
         label_css = "padding-top: 3px;"
 
-        prop_head = QLabel(info.get('name', ''))
+        is_upnp = info.get('protocol') == 'UPnP'
+        prop_head = QLabel(upnp_device_title(info) if is_upnp else info.get('name', ''))
+        prop_head.setTextFormat(Qt.TextFormat.PlainText)
         prop_head.setStyleSheet(head_css)
         layout.addWidget(prop_head, row, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
         row += 1
@@ -548,6 +742,16 @@ class MDNSBrowser(QMainWindow):
             'Server:': info.get('server', ''),
             'Address / location:': '\n'.join(info.get('addresses', [])),
         }
+        if is_upnp:
+            content['Type:'] = '\n'.join(info.get('types', [info.get('type', '')]))
+            for label, key in (
+                ('Manufacturer:', 'manufacturer'), ('Model:', 'model_name'),
+                ('Model number:', 'model_number'), ('Description:', 'model_description'),
+                ('Serial number:', 'serial_number'), ('Device ID:', 'udn'),
+                ('Presentation URL:', 'presentation_url'),
+            ):
+                if info.get(key):
+                    content[label] = info[key]
         if info.get('priority') is not None or info.get('weight') is not None:
             content['Loadbalance:'] = f"Priority: {info.get('priority')} weight: {info.get('weight')}"
 
@@ -555,14 +759,23 @@ class MDNSBrowser(QMainWindow):
             label = QLabel(label_text)
             label.setStyleSheet(label_css)
             value = QLabel(value_text)
+            value.setTextFormat(Qt.TextFormat.PlainText)
             value.setStyleSheet(value_css)
             value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             layout.addWidget(label, row, 0, Qt.AlignmentFlag.AlignTop)
             layout.addWidget(value, row, 1, Qt.AlignmentFlag.AlignTop)
             row += 1
 
-        props = info.get('properties', {})
-        if props:
+        if is_upnp:
+            property_groups = [
+                (f"SSDP: {usn}", props)
+                for usn, props in sorted(info.get('advertisements', {}).items())
+            ]
+        else:
+            property_groups = [('Properties', info.get('properties', {}))]
+        for heading, props in property_groups:
+            if not props:
+                continue
             prop_row = row
             for k, v in props.items():
                 if k == '' and v == None:
@@ -570,6 +783,8 @@ class MDNSBrowser(QMainWindow):
                 row += 1
                 key_label = QLabel(f"{k}:")
                 val_label = QLabel(str(v))
+                key_label.setTextFormat(Qt.TextFormat.PlainText)
+                val_label.setTextFormat(Qt.TextFormat.PlainText)
                 key_label.setStyleSheet(label_css)
                 val_label.setStyleSheet(value_css)
                 val_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -577,14 +792,25 @@ class MDNSBrowser(QMainWindow):
                 layout.addWidget(val_label, row, 1, Qt.AlignmentFlag.AlignTop)
 
             if row > prop_row:
-                prop_head2 = QLabel("Properties")
+                prop_head2 = QLabel(heading)
+                prop_head2.setTextFormat(Qt.TextFormat.PlainText)
                 prop_head2.setStyleSheet(head_css)
                 layout.addWidget(prop_head2, prop_row, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
+                row += 1
 
         ok_button = QPushButton("OK")
         ok_button.clicked.connect(dialog.accept)
         dialog.setLayout(QVBoxLayout())
-        dialog.layout().addLayout(layout)
+        if is_upnp:
+            content_widget = QWidget()
+            content_widget.setLayout(layout)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(content_widget)
+            dialog.layout().addWidget(scroll)
+            dialog.resize(800, 650)
+        else:
+            dialog.layout().addLayout(layout)
         dialog.layout().addWidget(ok_button)
         dialog.exec()
 
@@ -599,6 +825,8 @@ class MDNSBrowser(QMainWindow):
             self.services[protocol].clear()
             self.list_widgets[protocol].clear()
             self.clear_filter(protocol)
+        self.upnp_search_input.clear()
+        self._add_upnp_all_devices_item()
 
     def rescan_network(self):
         self.worker.stop()

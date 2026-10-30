@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
-if [ -f src/app.py ]; then
-  if [ -d .venv ]; then
-    source ./.venv/bin/activate
-    pyinstaller \
-      --windowed \
-      --hide-console="hide-early" \
-      --osx-bundle-identifier='mDNSBrowser' \
-      --add-data='assets:assets' \
-      --add-data='src/os_qt_tools.py:.' \
-      --hidden-import='zeroconf._utils.ipaddress' \
-      --hidden-import='zeroconf._handlers.answers' \
-      --hidden-import='async_upnp_client.search' \
-      --hidden-import='async_upnp_client.ssdp' \
-      --icon='assets/default_icon.icns' \
-      --name='mDNSBrowser' \
-      src/app.py
-  else
-    echo "venv not found"
-  fi
-else
-  echo "app.py not found"
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+project_root="$(cd -- "$script_dir/.." && pwd)"
+cd "$project_root"
+
+if [ ! -x .venv/bin/python ]; then
+  echo "Project virtual environment not found: $project_root/.venv" >&2
+  exit 1
 fi
+
+exec .venv/bin/python -m PyInstaller \
+  --clean \
+  --noconfirm \
+  --windowed \
+  --osx-bundle-identifier='mDNSBrowser' \
+  --paths='src' \
+  --add-data='assets:assets' \
+  --hidden-import='zeroconf._utils.ipaddress' \
+  --hidden-import='zeroconf._handlers.answers' \
+  --hidden-import='async_upnp_client.search' \
+  --hidden-import='async_upnp_client.ssdp' \
+  --hidden-import='upnp' \
+  --icon='assets/default_icon.icns' \
+  --name='mDNSBrowser' \
+  src/app.py
