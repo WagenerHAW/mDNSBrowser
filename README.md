@@ -71,6 +71,7 @@ Discovery starts when the application opens.
 2. Open the **mDNS** or **UPnP** tab.
 3. Select a type in the left panel to filter the results on the right. In the
    **UPnP** tab, use the search field to narrow the list or choose **All devices**.
+   Click the selected mDNS type again to clear its filter.
 4. Click a service or device to inspect its details.
 5. Use **Clear and rescan Network** to discard results and restart discovery.
    Changing the selected interface also clears results and restarts discovery.
