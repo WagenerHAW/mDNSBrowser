@@ -1,143 +1,197 @@
-# mDNS and UPnP Service Browser (Async, PyQt6)
+# mDNSBrowser
 
-A cross-platform **mDNS / DNS-SD and UPnP / SSDP service discovery tool** built with **PyQt6**, Python’s **asyncio Zeroconf API**, and `async-upnp-client`.
-It allows you to browse, filter, and inspect network services and UPnP devices (including **Dante audio devices**) in real time.
+A desktop application for discovering and inspecting **mDNS / DNS-SD services** and
+**UPnP / SSDP devices** on local networks. Browse services, identify devices, and
+inspect discovery metadata from a single interface, with built-in queries for
+Dante audio networks.
 
-![screenshot](assets/demo.png)
-![details-view](assets/specs.png)
+Built with Python, PyQt6, `python-zeroconf`, and `async-upnp-client` for macOS,
+Windows, and Linux.
 
----
+## Features
 
-## ✨ Features
+### mDNS / DNS-SD
 
-- 🔍 **Automatic discovery** of all mDNS service types (`_services._dns-sd._udp.local.`)  
-- 📡 **UPnP / SSDP discovery** for devices such as media renderers, routers, and smart devices
-- 🏷️ **Readable UPnP device list** with friendly names, manufacturer/model, device type and address; repeated advertisements are combined per device
-- 🔎 **UPnP search** by name, model, manufacturer or address, with readable type filters and an **All devices** view
-- 🎚️ **Filter and browse** mDNS services and UPnP devices in separate tabs
-- 📜 **Detailed service info** including addresses, TXT properties, SSDP headers, priority, weight
-- 🌐 **Interface selection** – scan on a specific interface or all interfaces  
-- 🔄 **Rescan & refresh** with one click  
-- 📝 **Manual service query** with auto-correction for `.local.` suffix  
-- 🎵 **Quick Dante queries** for `_netaudio._udp.local.` etc.  
-- ✅ Cross-platform (Linux, macOS, Windows)
+- Discover advertised service types automatically and filter services by type.
+- Inspect hostnames, addresses, ports, TXT records, priority, and weight.
+- Query service types manually, with automatic completion of the `.local.` suffix.
+- Start browsing common Dante service types with one click.
 
----
+### UPnP / SSDP
 
-## 🚀 Installation
+- Discover devices through recurring SSDP searches, including routers, media
+  renderers, and other UPnP devices.
+- Identify devices by friendly name, manufacturer, model, device type, and address.
+- Search by name, model, manufacturer, or address; combine search with readable
+  device and service type filters, or browse **All devices**.
+- Group advertisements by device ID while retaining each advertisement's SSDP
+  headers for inspection. Embedded devices keep their own identities and names.
+- Inspect available model details, serial numbers, device IDs, and presentation
+  URLs in a scrollable details dialog with selectable text.
 
-### Requirements
-- Python **3.9+**
-- [python-zeroconf](https://github.com/jstasiak/python-zeroconf) (newer versions with `AsyncZeroconf`)
-- [async-upnp-client](https://github.com/StevenLooman/async_upnp_client)
-- [PyQt6](https://pypi.org/project/PyQt6/)
-- [psutil](https://pypi.org/project/psutil/)
+### Network selection
 
-### Install dependencies
+Browse mDNS and UPnP results in separate tabs. Select a specific network interface
+or use **All interfaces**, then clear results and restart discovery at any time.
+Discovery runs in the background to keep the interface responsive.
+
+For UPnP, **All interfaces** searches active IPv4 multicast interfaces concurrently,
+including Wi-Fi and Ethernet. A failed search on one adapter does not prevent
+discovery on the others. UPnP discovery currently uses IPv4.
+
+## Getting started
+
+Use **Python 3.11 or later** and a desktop environment. Runtime dependencies are
+listed in [requirements.txt](requirements.txt).
+
+Run the following commands from the project root.
+
+### macOS and Linux
+
 ```bash
-pip install -r requirements
-```
-
----
-
-## ▶️ Usage
-
-Run the app:
-
-```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 python src/app.py
 ```
 
-or build an executable with the spec files 
+### Windows (PowerShell)
 
-### Build the macOS app
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe src\app.py
+```
 
-With dependencies and PyInstaller installed in the project's `.venv`, run:
+## Usage
+
+Discovery starts when the application opens.
+
+1. Select **All interfaces** or a specific adapter and IPv4 address.
+2. Open the **mDNS** or **UPnP** tab.
+3. Select a type in the left panel to filter the results on the right. In the
+   **UPnP** tab, use the search field to narrow the list or choose **All devices**.
+4. Click a service or device to inspect its details.
+5. Use **Clear and rescan Network** to discard results and restart discovery.
+   Changing the selected interface also clears results and restarts discovery.
+
+### Manual mDNS queries and Dante discovery
+
+In the **mDNS** tab, enter a service type under **Manual mDNS Service Query** and
+click **Query mDNS Service**. For example, `_http._tcp` is normalized to
+`_http._tcp.local.`. This also lets you browse service types that were not returned
+by automatic service type enumeration.
+
+Use **Add Dante mDNS Services** to browse these built-in service types:
+
+```text
+_dante-safe._udp.local.
+_dante-upgr._udp.local.
+_netaudio-arc._udp.local.
+_netaudio-chan._udp.local.
+_netaudio-cmc._udp.local.
+_netaudio-dbc._udp.local.
+_dante-ddm-d._udp.local.
+_dante-ddm-c._tcp.local.
+```
+
+### UPnP device details
+
+Devices appear as SSDP responses arrive. Names and model information are loaded
+automatically from device descriptions; devices with unavailable descriptions
+remain visible using their address. The details dialog shows available metadata
+and the original headers for each advertisement associated with the device.
+
+UPnP searches repeat automatically after a 30-second pause between search rounds.
+Use **Clear and rescan Network** to start a fresh search immediately.
+
+## Building the macOS application
+
+After installing runtime dependencies in the project's `.venv`, install
+PyInstaller and run the build script from the project root:
 
 ```bash
+.venv/bin/python -m pip install pyinstaller
 bash spec/build_macos.sh
 ```
 
-The app is written to `dist/mDNSBrowser.app`. The script also works from inside
-`spec` (`bash build_macos.sh`). It includes `src` in PyInstaller's import search
-path so local modules such as `upnp` and `os_qt_tools` are bundled.
+The application bundle is written to `dist/mDNSBrowser.app`. The script bundles
+the application modules and assets and can also be run from inside `spec` with
+`bash build_macos.sh`.
 
-To see a startup error in Terminal, launch the executable directly:
+To inspect startup errors, launch the bundled executable from Terminal:
 
 ```bash
 ./dist/mDNSBrowser.app/Contents/MacOS/mDNSBrowser
 ```
 
-### Basic workflow
-1. Select an interface (`All interfaces` or a specific adapter/IP).
-2. Use the **mDNS** and **UPnP** tabs to switch between discovery methods.
-3. Select a type to filter and view discovered **services or devices** on the right panel.
-4. Click a service to open a detailed info dialog with TXT records or SSDP headers.
-5. In the **mDNS** tab, use **Manual mDNS Service Query** to search for a service type (input auto-corrects `.local.`).
-6. In the **mDNS** tab, use **Add Dante mDNS Services** to query common Dante services.
+## Troubleshooting
 
-**All interfaces** searches for UPnP devices on every active IPv4 multicast interface
-at the same time, including Wi-Fi and Ethernet. A failed search on one adapter does not
-prevent discovery on the others. Selecting a specific adapter limits discovery to that network.
+### No services or devices appear
 
-UPnP names are loaded automatically from each device's description. Devices that do not
-provide a readable description still appear using their address. The details dialog keeps
-the device ID and the original SSDP headers for every advertisement.
+Confirm that the selected interface is connected to the intended network and that
+devices are advertising services. Local multicast traffic must be allowed by the
+host firewall and network. Try selecting the adapter explicitly, then rescan.
 
-### macOS: no devices or “No route to host”
+### macOS local network access
 
-If both discovery tabs stay empty and multicast sends report `[Errno 65] No route to host`,
-check **System Settings → Privacy & Security → Local Network**. Enable access for the
-app that launches the browser: for example, **PyCharm** when running from that IDE, or
-**mDNSBrowser** when running the packaged app. Fully quit and reopen that app, then rescan.
+If discovery stays empty or multicast sends report `[Errno 65] No route to host`,
+check **System Settings → Privacy & Security → Local Network**. Enable access for
+**mDNSBrowser** when running the packaged app, or for the responsible IDE, such as
+**PyCharm**, when launching from there. Fully quit and reopen that app, then rescan.
 
-To compare discovery outside the IDE, run the same source from Terminal:
+To compare behavior outside the IDE, run this command from the project root in
+Terminal:
 
 ```bash
-cd /path/to/mDNSBrowser
 .venv/bin/python src/app.py
 ```
 
-macOS applies local-network access to the responsible launching app; a successful run
-from Terminal does not establish that an IDE has permission. See
+macOS tracks local network access for the responsible application. A successful
+Terminal run does not establish that an IDE has permission. See
 [Apple's local network privacy documentation](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
 
----
+## Development
 
-## 🛠️ Development Notes
+The discovery worker runs an `asyncio` event loop in a background thread and sends
+results to the PyQt6 interface through Qt signals. mDNS browsing uses
+`AsyncZeroconf`; UPnP discovery uses `async-upnp-client`. UPnP description requests
+share in-flight work and cached results, with a four-second request timeout.
 
-- Uses `AsyncZeroconf` for async mDNS service browsing.
-- Uses `async-upnp-client` to run recurring `ssdp:all` searches for UPnP devices.
-- Runs an `asyncio` event loop in a background thread.  
-- Communicates with the PyQt6 main thread via Qt signals for **thread-safe UI updates**.  
-- Service resolution uses `async_get_service_info()` with a timeout of **3s**, retriable if needed.  
-- Input normalization ensures user queries work even if `.local.` is missing.  
-- UPnP description requests run in the background with a four-second timeout and shared caching, including metadata for embedded devices.
-
-Run the discovery and UI regression tests without accessing the network:
+Run the discovery and UI regression tests on macOS or Linux without network access
+or a running desktop:
 
 ```bash
 QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s test -p 'test_*.py'
 ```
 
----
+### Project structure
 
-## 📦 Project Structure
-```
+```text
 src/
-  app.py         # Main PyQt6 app and AsyncZCWorker
-README.md
+  app.py                 # PyQt6 interface and asynchronous discovery worker
+  upnp.py                # UPnP description parsing and device labels
+  os_qt_tools.py         # Platform icons and resource paths
+spec/
+  build_macos.sh         # macOS application build script
+  mDNSBrowser_macos.spec # macOS PyInstaller specification
+  mDNSBrowser_win.spec   # Windows PyInstaller specification
+test/
+  test_upnp.py           # Discovery, device metadata, and UI regression tests
+  service.py             # Manual mDNS test service publisher
+assets/                  # Application icons and screenshots
+requirements.txt         # Runtime dependencies
 ```
 
----
+## Screenshots
 
-## 🔮 Roadmap
-- [ ] Add **collapsible properties section** in service info dialog  
-- [ ] Retry resolution for slow-responding devices  
-- [ ] Configurable list of **favorite service types** (like Dante)  
-- [ ] Dark/light theme toggle  
+These screenshots show the earlier mDNS interface. The current application adds
+separate mDNS and UPnP tabs and the device browsing features described above.
 
----
+![mDNS service browsing in an earlier interface version](assets/demo.png)
 
-## 📜 License
-MIT © 2025 Thorsten Wagener 
+![Dante mDNS service details in an earlier interface version](assets/specs.png)
+
+## License
+
+MIT © 2025 Thorsten Wagener
