@@ -431,6 +431,19 @@ class AsyncZCWorker:
         }
 
 
+class ToggleFilterListWidget(QListWidget):
+    """Allow clicking the current selection again to clear a type filter."""
+
+    def mousePressEvent(self, event):
+        item = self.itemAt(event.position().toPoint())
+        if (event.button() == Qt.MouseButton.LeftButton and item is not None
+                and item == self.currentItem() and item.isSelected()):
+            self.setCurrentItem(None)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class MDNSBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -498,7 +511,7 @@ class MDNSBrowser(QMainWindow):
         self.worker.start()
 
     def _create_discovery_tab(self, protocol: str, type_header: str, list_header: str):
-        type_widget = QListWidget()
+        type_widget = ToggleFilterListWidget() if protocol == 'mDNS' else QListWidget()
         list_widget = QListWidget()
         filter_label = QLabel("Filter:")
 

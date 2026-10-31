@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mdnsbrowser"
-version = "0.1.0"
+version = "0.1.2"
 description = "mDNS Browser for analysing the network"
 authors = ["Thorsten Wagener <thorsten.wagener@haw-hamburg.de>"]
 readme = "README.md"
