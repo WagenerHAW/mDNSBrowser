@@ -28,14 +28,16 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QLineEdit, QComboBox, QDialog, QGridLayout,
     QTabWidget, QScrollArea
 )
-from PyQt6.QtCore import Qt, QObject, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, QSignalBlocker, pyqtSignal
 from PyQt6.QtGui import QIcon
 
 if __package__:
+    from .network_interfaces import NetworkInterfaceMonitor, read_network_interfaces
     from .upnp import (
         parse_upnp_description, upnp_device_title, upnp_device_summary, upnp_type_label,
     )
 else:
+    from network_interfaces import NetworkInterfaceMonitor, read_network_interfaces
     from upnp import (
         parse_upnp_description, upnp_device_title, upnp_device_summary, upnp_type_label,
     )
@@ -76,6 +78,10 @@ class AsyncZCSignals(QObject):
     service_added = pyqtSignal(str, dict)
     service_removed = pyqtSignal(str)
     error = pyqtSignal(str)
+
+
+class NetworkInterfaceSignals(QObject):
+    changed = pyqtSignal(object)
 
 
 class AsyncZCWorker:
@@ -445,12 +451,15 @@ class ToggleFilterListWidget(QListWidget):
 
 
 class MDNSBrowser(QMainWindow):
+    _INTERFACE_NAME_ROLE = Qt.ItemDataRole.UserRole + 1
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle('mDNS and UPnP Service Browser')
         self.setGeometry(100, 100, 1024, 768)
 
         self.interface_ip = None
+        self._closing = False
         self.service_types = {"mDNS": set(), "UPnP": set()}
         self.services = {"mDNS": {}, "UPnP": {}}
         self._filters = {"mDNS": "", "UPnP": ""}
@@ -463,11 +472,12 @@ class MDNSBrowser(QMainWindow):
         self.upnp_search_input.textChanged.connect(lambda: self._refresh_service_list('UPnP'))
 
         self.interface_selector = QComboBox()
-        self.interface_selector.addItem("All interfaces", userData=None)
-        for iface, addrs in psutil.net_if_addrs().items():
-            for addr in addrs:
-                if addr.family == socket.AF_INET:
-                    self.interface_selector.addItem(f"{iface} ({addr.address})", userData=addr.address)
+        try:
+            snapshot = read_network_interfaces()
+        except Exception:
+            logger.warning('Could not read initial network interfaces; will retry', exc_info=True)
+            snapshot = ()
+        self._refresh_interface_selector(snapshot)
         self.interface_selector.currentIndexChanged.connect(self.interface_changed)
 
         self.manual_query_label = QLabel("Manual mDNS Service Query:")
@@ -501,13 +511,64 @@ class MDNSBrowser(QMainWindow):
         container.setLayout(main_layout)
         self.setCentralWidget(container)
 
-        self.signals = AsyncZCSignals()
-        self.signals.service_type_found.connect(self._on_service_type_found)
-        self.signals.service_added.connect(self._on_service_added)
-        self.signals.service_removed.connect(self._on_service_removed)
-        self.signals.error.connect(self._on_error)
+        self._start_discovery()
 
-        self.worker = AsyncZCWorker(self.signals, interface=self.interface_ip)
+        # This monitor survives discovery restarts and even discovery startup
+        # failures, so reconnecting an adapter can always trigger recovery.
+        self.network_signals = NetworkInterfaceSignals()
+        self.network_signals.changed.connect(self._on_network_interfaces_changed)
+        self.interface_monitor = NetworkInterfaceMonitor(snapshot, self.network_signals.changed.emit)
+        self.interface_monitor.start()
+
+    def _refresh_interface_selector(self, snapshot):
+        selector = self.interface_selector
+        selected_name = selector.currentData(self._INTERFACE_NAME_ROLE)
+        selected_ip = selector.currentData()
+        selected_index = 0
+        with QSignalBlocker(selector):
+            selector.clear()
+            selector.addItem('All interfaces', userData=None)
+            for interface in snapshot:
+                if not interface.is_up:
+                    continue
+                for address in interface.addresses:
+                    if address.family != socket.AF_INET or address.address == '0.0.0.0':
+                        continue
+                    selector.addItem(f'{interface.name} ({address.address})', userData=address.address)
+                    index = selector.count() - 1
+                    selector.setItemData(index, interface.name, self._INTERFACE_NAME_ROLE)
+                    if interface.name == selected_name:
+                        # Prefer the same address; otherwise follow the adapter
+                        # when DHCP replaces its address.
+                        if selected_index == 0 or address.address == selected_ip:
+                            selected_index = index
+            selector.setCurrentIndex(selected_index)
+        self.interface_ip = selector.currentData()
+
+    def _on_network_interfaces_changed(self, snapshot):
+        if self._closing:
+            return
+        logger.info('Network interfaces changed; refreshing interfaces and discovery')
+        self._refresh_interface_selector(snapshot)
+        self.rescan_network()
+
+    def _start_discovery(self):
+        signals = AsyncZCSignals()
+        self.signals = signals
+
+        def connect(signal, callback):
+            def forward(*args):
+                # A queued result from a retired worker must not repopulate the
+                # cleared lists or display an error from the previous network.
+                if self.signals is signals and not self._closing:
+                    callback(*args)
+            signal.connect(forward, Qt.ConnectionType.QueuedConnection)
+
+        connect(signals.service_type_found, self._on_service_type_found)
+        connect(signals.service_added, self._on_service_added)
+        connect(signals.service_removed, self._on_service_removed)
+        connect(signals.error, self._on_error)
+        self.worker = AsyncZCWorker(signals, interface=self.interface_ip)
         self.worker.start()
 
     def _create_discovery_tab(self, protocol: str, type_header: str, list_header: str):
@@ -565,10 +626,7 @@ class MDNSBrowser(QMainWindow):
     def interface_changed(self):
         self.interface_ip = self.interface_selector.currentData()
         logger.info(f"Selected interface: {self.interface_ip or 'All interfaces'}")
-        self.worker.stop()
-        self.worker = AsyncZCWorker(self.signals, interface=self.interface_ip)
-        self.clear_discovery_results()
-        self.worker.start()
+        self.rescan_network()
 
     def set_service_filter(
         self,
@@ -842,12 +900,14 @@ class MDNSBrowser(QMainWindow):
         self._add_upnp_all_devices_item()
 
     def rescan_network(self):
+        self.signals = None
         self.worker.stop()
-        self.worker = AsyncZCWorker(self.signals, interface=self.interface_ip)
         self.clear_discovery_results()
-        self.worker.start()
+        self._start_discovery()
 
     def closeEvent(self, event):
+        self._closing = True
+        self.interface_monitor.stop()
         try:
             self.worker.stop()
         except Exception:

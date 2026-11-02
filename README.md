@@ -35,6 +35,13 @@ Browse mDNS and UPnP results in separate tabs. Select a specific network interfa
 or use **All interfaces**, then clear results and restart discovery at any time.
 Discovery runs in the background to keep the interface responsive.
 
+Network interfaces are checked in the background every two seconds. When an
+adapter appears, disappears, goes up or down, or changes its addresses or network
+configuration, the interface list updates and mDNS and UPnP discovery restart with
+cleared results. The selected adapter stays selected through an address change;
+if it becomes unavailable, selection falls back to **All interfaces**. Only active
+adapters with an IPv4 address appear as individual choices.
+
 For UPnP, **All interfaces** searches active IPv4 multicast interfaces concurrently,
 including Wi-Fi and Ethernet. A failed search on one adapter does not prevent
 discovery on the others. UPnP discovery currently uses IPv4.
