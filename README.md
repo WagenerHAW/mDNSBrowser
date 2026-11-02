@@ -63,6 +63,19 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe src\app.py
 ```
 
+### Poetry
+
+With Poetry 2.0 or later, you can install the locked runtime dependencies instead:
+
+```bash
+poetry install --only main
+poetry run python src/app.py
+```
+
+Poetry manages dependencies only; the application runs directly from `src/app.py`.
+Commit `poetry.lock` when changing dependencies. Keep the runtime version ranges
+in `requirements.txt` aligned with `pyproject.toml`.
+
 ## Usage
 
 Discovery starts when the application opens.
@@ -116,6 +129,14 @@ PyInstaller and run the build script from the project root:
 bash spec/build_macos.sh
 ```
 
+For a Poetry setup, use Python 3.11–3.15, create `.venv` as shown above, and install
+the optional build group before running the same script:
+
+```bash
+poetry install --only main,build
+bash spec/build_macos.sh
+```
+
 The application bundle is written to `dist/mDNSBrowser.app`. The script bundles
 the application modules and assets and can also be run from inside `spec` with
 `bash build_macos.sh`.
@@ -159,6 +180,12 @@ results to the PyQt6 interface through Qt signals. mDNS browsing uses
 `AsyncZeroconf`; UPnP discovery uses `async-upnp-client`. UPnP description requests
 share in-flight work and cached results, with a four-second request timeout.
 
+`poetry install` also installs the development tools. Run the tests with pytest:
+
+```bash
+QT_QPA_PLATFORM=offscreen poetry run pytest
+```
+
 Run the discovery and UI regression tests on macOS or Linux without network access
 or a running desktop:
 
@@ -195,4 +222,4 @@ separate mDNS and UPnP tabs and the device browsing features described above.
 
 ## License
 
-MIT © 2025 Thorsten Wagener
+MIT © 2026 Thorsten Wagener
