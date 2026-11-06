@@ -48,8 +48,8 @@ discovery on the others. UPnP discovery currently uses IPv4.
 
 ## Getting started
 
-Use **Python 3.11 or later** and a desktop environment. Runtime dependencies are
-listed in [requirements.txt](requirements.txt).
+Use **Python 3.11 or later** and a desktop environment. Install the application
+and its runtime dependencies in editable mode with `pip install -e .`.
 
 Run the following commands from the project root.
 
@@ -58,7 +58,7 @@ Run the following commands from the project root.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -e .
 python src/app.py
 ```
 
@@ -66,22 +66,23 @@ python src/app.py
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -e .
 .\.venv\Scripts\python.exe src\app.py
 ```
 
 ### Poetry
 
-With Poetry 2.0 or later, you can install the locked runtime dependencies instead:
+With Poetry 2.0 or later, you can install the application and locked runtime
+dependencies instead:
 
 ```bash
 poetry install --only main
 poetry run python src/app.py
 ```
 
-Poetry manages dependencies only; the application runs directly from `src/app.py`.
-Commit `poetry.lock` when changing dependencies. Keep the runtime version ranges
-in `requirements.txt` aligned with `pyproject.toml`.
+Poetry installs the `src` package in editable mode; launch the application with
+`python src/app.py` as shown above. Commit `poetry.lock` when changing dependencies.
+Keep the runtime version ranges in `requirements.txt` aligned with `pyproject.toml`.
 
 ## Usage
 
@@ -153,6 +154,19 @@ To inspect startup errors, launch the bundled executable from Terminal:
 ```bash
 ./dist/mDNSBrowser.app/Contents/MacOS/mDNSBrowser
 ```
+
+## Building the Windows application
+
+On Windows, use Python 3.11–3.15 and run these commands from the project root
+after installing the application as shown above:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install "pyinstaller>=6.14.2,<7.0.0"
+.\.venv\Scripts\python.exe -m PyInstaller --clean --noconfirm spec\mDNSBrowser_win.spec
+```
+
+The executable is written to `dist\mDNS Browser.exe`. The spec bundles the
+application modules, UPnP dependencies, and assets.
 
 ## Troubleshooting
 

@@ -1,16 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+project_root = Path(SPECPATH).parent
+
 datas = [
-    ('assets', 'assets'),
-    ('src/os_qt_tools.py', '.')
+    (str(project_root / 'assets'), 'assets'),
 ]
 
 a = Analysis(
-    ['src\\app.py'],
-    pathex=[],
+    [str(project_root / 'src/app.py')],
+    pathex=[str(project_root / 'src')],
     binaries=[],
     datas=datas,
-    hiddenimports=['zeroconf._utils.ipaddress','zeroconf._handlers.answers', 'psutil'],
+    hiddenimports=[
+        'zeroconf._utils.ipaddress', 'zeroconf._handlers.answers', 'psutil',
+        'async_upnp_client.search', 'async_upnp_client.ssdp',
+        'network_interfaces', 'os_qt_tools', 'upnp',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -39,5 +46,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['assets\\default_icon.ico'],
+    icon=[str(project_root / 'assets/default_icon.ico')],
 )
